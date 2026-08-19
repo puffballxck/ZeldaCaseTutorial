@@ -1,0 +1,232 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
+#include "Data/ZCPlayerController.h"
+
+#include "Characters/ZCCharBase.h"
+#include "Kismet/GameplayStatics.h"
+#include "TimerManager.h"
+#include "UI/ZCLayout.h"
+
+void AZCPlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	SetShowMouseCursor(false);
+	SetInputMode(FInputModeGameOnly());
+	RequestPresentationInitialization();
+}
+
+void AZCPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	GetWorldTimerManager().ClearTimer(PresentationInitializationTimer);
+	bPresentationInitializationPending = false;
+	ReleasePlayerPresentation(PresentedPlayer);
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void AZCPlayerController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+
+	if (IsLocalController())
+	{
+		RequestPresentationInitialization();
+	}
+}
+
+void AZCPlayerController::OnUnPossess()
+{
+	GetWorldTimerManager().ClearTimer(PresentationInitializationTimer);
+	bPresentationInitializationPending = false;
+
+	AZCCharBase* PreviousPlayer = Cast<AZCCharBase>(GetPawn());
+	ReleasePlayerPresentation(PreviousPlayer);
+
+	Super::OnUnPossess();
+}
+
+void AZCPlayerController::InitializePlayerPresentation()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	AZCCharBase* PlayerCharacter = Cast<AZCCharBase>(GetPawn());
+	if (!IsValid(PlayerCharacter))
+	{
+		return;
+	}
+
+	// Wait until the pawn's BeginPlay has completed so its gameplay state and
+	// Blueprint defaults are ready before the presentation binds to it.
+	if (!PlayerCharacter->HasActorBegunPlay())
+	{
+		RequestPresentationInitialization();
+		return;
+	}
+
+	if (PresentedPlayer && PresentedPlayer != PlayerCharacter)
+	{
+		ReleasePlayerPresentation(PresentedPlayer);
+	}
+
+	PresentedPlayer = PlayerCharacter;
+
+	// Adopt a legacy layout only when no controller-owned class is configured.
+	// This keeps old BP_Player assets working while allowing RootLayoutClass to
+	// become the authoritative composition root as assets are migrated.
+	if (!RootLayoutClass && IsValid(PlayerCharacter->LayoutRef) && PlayerCharacter->LayoutRef != RootLayout)
+	{
+		if (IsValid(RootLayout))
+		{
+			RootLayout->RemoveFromParent();
+		}
+
+		RootLayout = PlayerCharacter->LayoutRef;
+	}
+
+	TSubclassOf<UUserWidget> LayoutClass = PlayerCharacter->LayoutClassRef;
+	if (RootLayoutClass)
+	{
+		LayoutClass = RootLayoutClass;
+	}
+	if (!IsValid(RootLayout) && LayoutClass)
+	{
+		RootLayout = CreateWidget<UZCLayout>(this, LayoutClass);
+		if (IsValid(RootLayout))
+		{
+			PlayerCharacter->LayoutRef = RootLayout;
+			RootLayout->ConstructDeferred(PlayerCharacter);
+		}
+	}
+
+	if (!IsValid(RootLayout))
+	{
+		return;
+	}
+
+	RootLayout->SetOwningPlayer(this);
+	if (!RootLayout->IsInViewport())
+	{
+		RootLayout->AddToPlayerScreen();
+	}
+
+	// Keep the pawn reference synchronized for stamina/rune code that still
+	// talks to LayoutRef directly during the staged migration.
+	PlayerCharacter->LayoutRef = RootLayout;
+	ApplyRuneMenuPolicy();
+}
+
+void AZCPlayerController::SetRuneMenuOpen(const bool bOpen)
+{
+	if (bRuneMenuOpen == bOpen)
+	{
+		// Reapplying is intentional: callers may invoke this before the layout is
+		// created, or after focus was taken by another widget.
+		ApplyRuneMenuPolicy();
+		return;
+	}
+
+	bRuneMenuOpen = bOpen;
+	ApplyRuneMenuPolicy();
+}
+
+void AZCPlayerController::ToggleRuneMenu()
+{
+	SetRuneMenuOpen(!bRuneMenuOpen);
+}
+
+void AZCPlayerController::RequestPresentationInitialization()
+{
+	if (bPresentationInitializationPending || !GetWorld())
+	{
+		return;
+	}
+
+	bPresentationInitializationPending = true;
+	PresentationInitializationTimer = GetWorldTimerManager().SetTimerForNextTick(
+		FTimerDelegate::CreateUObject(this, &AZCPlayerController::HandleDeferredPresentationInitialization));
+}
+
+void AZCPlayerController::HandleDeferredPresentationInitialization()
+{
+	bPresentationInitializationPending = false;
+	InitializePlayerPresentation();
+}
+
+void AZCPlayerController::ApplyRuneMenuPolicy()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (IsValid(RootLayout))
+	{
+		RootLayout->SetRuneMenuOpen(bRuneMenuOpen);
+	}
+	else if (bRuneMenuOpen)
+	{
+		// Do not pause before there is a focus target: game-time timers do not
+		// advance while paused, so initialization could otherwise deadlock.
+		RequestPresentationInitialization();
+		return;
+	}
+
+	if (bRuneMenuOpen)
+	{
+		SetShowMouseCursor(true);
+
+		FInputModeGameAndUI InputMode;
+		InputMode.SetHideCursorDuringCapture(false);
+		if (IsValid(RootLayout))
+		{
+			InputMode.SetWidgetToFocus(RootLayout->TakeWidget());
+		}
+		SetInputMode(InputMode);
+
+		if (!UGameplayStatics::IsGamePaused(this))
+		{
+			bPausedByRuneMenu = SetPause(true);
+		}
+		return;
+	}
+
+	SetShowMouseCursor(false);
+	SetInputMode(FInputModeGameOnly());
+	if (bPausedByRuneMenu)
+	{
+		SetPause(false);
+		bPausedByRuneMenu = false;
+	}
+}
+
+void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
+{
+	if (bRuneMenuOpen || bPausedByRuneMenu)
+	{
+		bRuneMenuOpen = false;
+		ApplyRuneMenuPolicy();
+	}
+
+	if (IsValid(PreviousPlayer) && PreviousPlayer->LayoutRef == RootLayout)
+	{
+		PreviousPlayer->LayoutRef = nullptr;
+	}
+
+	if (IsValid(RootLayout))
+	{
+		RootLayout->RemoveFromParent();
+	}
+
+	RootLayout = nullptr;
+	PresentedPlayer = nullptr;
+}
