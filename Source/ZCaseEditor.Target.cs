@@ -10,6 +10,6 @@ public class ZCaseEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V4;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_3;
-		ExtraModuleNames.Add("ZCase");
+		ExtraModuleNames.AddRange(new string[] { "ZCase", "ZCaseEditor" });
 	}
 }
