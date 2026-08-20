@@ -9,7 +9,7 @@ class UAnimSequence;
 struct FZCAnimationRootFixSettings
 {
 	FVector TargetFirstKeyScale = FVector(100.0);
-	FRotator TargetFirstKeyRotation = FRotator(0.0, 0.0, -90.0);
+	FRotator TargetFirstKeyRotation = FRotator(0.0, 90.0, 0.0);
 	float Tolerance = 0.001f;
 };
 

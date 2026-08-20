@@ -77,7 +77,7 @@ private:
 		Section.AddMenuEntry(
 			TEXT("ZCaseFixSelectedAnimationRoots"),
 			LOCTEXT("FixSelectedAnimationRootsLabel", "Fix Selected Link Animation Roots"),
-			LOCTEXT("FixSelectedAnimationRootsTooltip", "Set the first root key target to Scale 100 and Rotation (Pitch 0, Yaw 0, Roll -90) while preserving animation deltas. Does not reimport or save assets."),
+			LOCTEXT("FixSelectedAnimationRootsTooltip", "Set the first root key target to Scale 100 and Rotation (Pitch 0, Yaw 90, Roll 0) while preserving animation deltas. Does not reimport or save assets."),
 			FSlateIcon(),
 			FUIAction(FExecuteAction::CreateRaw(this, &FZCaseEditorModule::FixSelectedAnimationRoots)));
 	}
@@ -99,7 +99,7 @@ private:
 				"Apply the Link root correction to {0} selected Animation Sequence(s)?\n\n"
 				"First root key target:\n"
 				"  Scale: 100, 100, 100\n"
-				"  Rotation: Pitch 0, Yaw 0, Roll -90\n\n"
+				"  Rotation: Pitch 0, Yaw 90, Roll 0\n\n"
 				"The tool preserves translation and relative rotation/scale changes. It does not reimport or save assets. You can inspect the result and use Undo before saving."),
 			FText::AsNumber(Animations.Num()));
 		if (FMessageDialog::Open(EAppMsgType::YesNo, Confirmation) != EAppReturnType::Yes)
