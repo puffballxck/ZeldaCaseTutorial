@@ -60,8 +60,8 @@ private:
 	void SetActiveRune(ERunes NewActiveRune);
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="ZCase|Runes", meta=(AllowPrivateAccess="true"))
-	ERunes SelectedRune = ERunes::R_EMAX;
+	TEnumAsByte<ERunes> SelectedRune = ERunes::R_EMAX;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="ZCase|Runes", meta=(AllowPrivateAccess="true"))
-	ERunes ActiveRune = ERunes::R_EMAX;
+	TEnumAsByte<ERunes> ActiveRune = ERunes::R_EMAX;
 };

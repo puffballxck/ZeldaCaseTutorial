@@ -6,7 +6,7 @@
 #include "ZCGameplayTypes.generated.h"
 
 UENUM(BlueprintType)
-enum class EMovementTypes
+enum class EMovementTypes : uint8
 {
 	MT_EMAX UMETA(DisplayName = "EMAX"),           // Default / unset.
 	MT_Walking UMETA(DisplayName = "Walking"),     // Ground movement.
@@ -17,7 +17,7 @@ enum class EMovementTypes
 };
 
 UENUM(BlueprintType)
-enum class ERunes
+enum ERunes : uint8
 {
 	R_EMAX UMETA(DisplayName = "EMAX"),       // Default / no rune.
 	R_RBS UMETA(DisplayName = "RBS"),         // Remote bomb sphere.

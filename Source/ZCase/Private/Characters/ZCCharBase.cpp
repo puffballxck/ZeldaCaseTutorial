@@ -872,7 +872,7 @@ const FVector AZCCharBase::GetThrowDirection()
 	FVector  FinalDirection(
 	FollowCamera->GetForwardVector().X,FollowCamera->GetForwardVector().Y,0.0f);
 	//获取单位向量
-	FinalDirection.GetSafeNormal(0.0001f);
+	FinalDirection = FinalDirection.GetSafeNormal(0.0001f);
 	//加一些高度
 	FinalDirection = FinalDirection + FVector(0.0f,0.0f,0.5f);
 	//乘以力度大小1000

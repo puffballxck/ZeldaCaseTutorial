@@ -52,7 +52,7 @@ bool UZCRuneRuntimeComponent::ToggleSelectedRune()
 		return false;
 	}
 
-	SetActiveRune(ActiveRune == SelectedRune ? ERunes::R_EMAX : SelectedRune);
+	SetActiveRune(ActiveRune == SelectedRune ? ERunes::R_EMAX : SelectedRune.GetValue());
 	return true;
 }
 
