@@ -80,7 +80,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FZCAnimationRootFixRealAssetTest::RunTest(const FString& Parameters)
 {
-	const TCHAR* AssetPath = TEXT("/Game/_Game/Animations/LinkAnim/Link_Ani_Anim_Armature_A_Pose_Bow_Build_Move.Link_Ani_Anim_Armature_A_Pose_Bow_Build_Move");
+	const TCHAR* AssetPath = TEXT("/Game/_Game/Animations/LinkAnim/00_Combat/07_Combat_Pose/Bow/Link_Ani_Anim_Armature_A_Pose_Bow_Build_Move.Link_Ani_Anim_Armature_A_Pose_Bow_Build_Move");
 	UAnimSequence* SourceAnimation = LoadObject<UAnimSequence>(nullptr, AssetPath);
 	if (!TestNotNull(TEXT("The representative Link animation loads"), SourceAnimation))
 	{

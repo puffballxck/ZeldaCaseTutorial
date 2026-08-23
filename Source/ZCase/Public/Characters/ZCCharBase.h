@@ -8,6 +8,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Combat/ZCTargetable.h"
 #include "Gameplay/ZCGameplayTypes.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "ZCCharBase.generated.h"
@@ -28,6 +29,9 @@ class UParticleSystem;
 class AStaticActor;
 class AInteractBase;
 class UZCRuneRuntimeComponent;
+class UZCAttributeComponent;
+class UZCCombatComponent;
+class UZCTargetLockComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FZCStaminaChangedSignature,
@@ -41,7 +45,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	EMovementTypes, CurrentMovement);
 
 UCLASS()
-class ZCASE_API AZCCharBase : public ACharacter
+class ZCASE_API AZCCharBase : public ACharacter, public IZCTargetable
 {
 	GENERATED_BODY()
 
@@ -175,6 +179,15 @@ public:
 	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Runes")
 	TObjectPtr<UZCRuneRuntimeComponent> RuneRuntime;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
+	TObjectPtr<UZCAttributeComponent> Attributes;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
+	TObjectPtr<UZCCombatComponent> Combat;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Target Lock")
+	TObjectPtr<UZCTargetLockComponent> TargetLock;
 	
     bool bRBActivated = false;//炸弹是否被激活
 	bool bMagActivated = false;//磁铁是否被激活
@@ -265,6 +278,15 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+	virtual float TakeDamage(
+		float DamageAmount,
+		struct FDamageEvent const& DamageEvent,
+		class AController* EventInstigator,
+		AActor* DamageCauser) override;
+
+	virtual bool CanBeTargetLocked() const override;
+	virtual FVector GetTargetLockLocation() const override;
 	
 #pragma region Locomotion
 	UFUNCTION()

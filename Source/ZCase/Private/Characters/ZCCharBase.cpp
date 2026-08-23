@@ -21,6 +21,9 @@
 #include "Actors/InteractBase.h"
 #include "Actors/PickupActor.h"
 #include "Interface/MyInterface.h"
+#include "Combat/ZCAttributeComponent.h"
+#include "Combat/ZCCombatComponent.h"
+#include "Combat/ZCTargetLockComponent.h"
 
 
 AZCCharBase::AZCCharBase()
@@ -72,6 +75,9 @@ AZCCharBase::AZCCharBase()
 
 	PhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PhysicsHandle"));
 	RuneRuntime = CreateDefaultSubobject<UZCRuneRuntimeComponent>(TEXT("RuneRuntime"));
+	Attributes = CreateDefaultSubobject<UZCAttributeComponent>(TEXT("Attributes"));
+	Combat = CreateDefaultSubobject<UZCCombatComponent>(TEXT("Combat"));
+	TargetLock = CreateDefaultSubobject<UZCTargetLockComponent>(TEXT("TargetLock"));
 	PhysicsHandle->LinearDamping = 100.0f;//线性阻尼
 	PhysicsHandle->LinearStiffness = 325.0f;//硬度
 	PhysicsHandle->AngularDamping = 250.0f;//环形阻尼
@@ -151,6 +157,26 @@ void AZCCharBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	//}
 
 	Super::EndPlay(EndPlayReason);
+}
+
+float AZCCharBase::TakeDamage(
+	const float DamageAmount,
+	const FDamageEvent& DamageEvent,
+	AController* EventInstigator,
+	AActor* DamageCauser)
+{
+	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+	return Attributes ? Attributes->ApplyDamage(EngineDamage).AppliedDamage : EngineDamage;
+}
+
+bool AZCCharBase::CanBeTargetLocked() const
+{
+	return !Attributes || !Attributes->IsDead();
+}
+
+FVector AZCCharBase::GetTargetLockLocation() const
+{
+	return GetActorLocation();
 }
 
 void AZCCharBase::Landed(const FHitResult& Hit) //着陆逻辑

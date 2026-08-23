@@ -1,0 +1,34 @@
+# Unreal generated directories
+/Binaries/
+/Build/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+
+# Generated plugin output (plugin source and descriptors remain tracked)
+/Plugins/*/Binaries/
+/Plugins/*/Intermediate/
+**/Binaries/
+**/Intermediate/
+
+# Installed by Rider for the local editor session
+/Plugins/Developer/RiderLink/
+
+# IDE and local tooling
+/.codex/
+/.idea/
+/.vs/
+*.sln
+*.slnx
+*.VC.db
+*.VC.opendb
+*.DotSettings.user
+
+# Local source-import workspace; runtime assets live under Content/
+/Import/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
