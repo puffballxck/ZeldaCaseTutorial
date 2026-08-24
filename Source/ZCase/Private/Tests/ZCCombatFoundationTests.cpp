@@ -6,6 +6,7 @@
 #include "Combat/ZCCombatComponent.h"
 #include "Combat/ZCTargetLockComponent.h"
 #include "Characters/ZCCharBase.h"
+#include "Animation/AnimMontage.h"
 #include "GameFramework/Actor.h"
 #include "Misc/AutomationTest.h"
 
@@ -105,6 +106,48 @@ bool FZCWeaponInputPolicyTest::RunTest(const FString& Parameters)
 		TEXT("Attack input is ignored while sheathing"),
 		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Sheathing),
 		EZCWeaponCommand::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZCWeaponMontageConfigurationTest,
+	"ZCase.Combat.WeaponMontageConfiguration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZCWeaponMontageConfigurationTest::RunTest(const FString& Parameters)
+{
+	const UAnimMontage* DrawMontage = LoadObject<UAnimMontage>(
+		nullptr,
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_DrawSword.AM_DrawSword"));
+	const UAnimMontage* SheathMontage = LoadObject<UAnimMontage>(
+		nullptr,
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_SheathSword.AM_SheathSword"));
+
+	TestNotNull(TEXT("Draw montage exists"), DrawMontage);
+	TestNotNull(TEXT("Sheath montage exists"), SheathMontage);
+	if (DrawMontage)
+	{
+		TestTrue(TEXT("Draw montage has a slot track"), !DrawMontage->SlotAnimTracks.IsEmpty());
+		if (!DrawMontage->SlotAnimTracks.IsEmpty())
+		{
+			TestEqual(TEXT("Draw montage uses the ABP FullBody slot"), DrawMontage->SlotAnimTracks[0].SlotName, FName(TEXT("FullBody")));
+		}
+	}
+	if (SheathMontage)
+	{
+		TestTrue(TEXT("Sheath montage has a slot track"), !SheathMontage->SlotAnimTracks.IsEmpty());
+		if (!SheathMontage->SlotAnimTracks.IsEmpty())
+		{
+			TestEqual(TEXT("Sheath montage uses the ABP FullBody slot"), SheathMontage->SlotAnimTracks[0].SlotName, FName(TEXT("FullBody")));
+		}
+	}
+
+	const float DrawDelay = UZCCombatComponent::CalculateAttachmentDelay(1.24f, 0.35f);
+	const float SheathDelay = UZCCombatComponent::CalculateAttachmentDelay(0.92f, 0.70f);
+	TestTrue(TEXT("Draw attachment switches before the montage ends"), DrawDelay > 0.0f && DrawDelay < 1.24f);
+	TestTrue(TEXT("Sheath attachment switches before the montage ends"), SheathDelay > 0.0f && SheathDelay < 0.92f);
+	TestEqual(TEXT("Draw attachment default time is stable"), DrawDelay, 0.434f, 0.001f);
+	TestEqual(TEXT("Sheath attachment default time is stable"), SheathDelay, 0.644f, 0.001f);
 	return true;
 }
 

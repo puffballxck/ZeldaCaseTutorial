@@ -71,9 +71,14 @@ bool UZCCombatComponent::HandleAttackInput()
 bool UZCCombatComponent::StartDraw()
 {
 	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Drawing;
 	if (PlayMontage(DrawSwordMontage, &UZCCombatComponent::HandleDrawMontageEnded))
 	{
+		ScheduleAttachmentSwitch(
+			EZCWeaponAttachmentState::Equipped,
+			DrawSwordMontage,
+			DrawAttachmentNormalizedTime);
 		return true;
 	}
 
@@ -84,6 +89,7 @@ bool UZCCombatComponent::StartDraw()
 bool UZCCombatComponent::StartWeaponAttack()
 {
 	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Attacking;
 	StartAttack();
 	if (PlayMontage(AttackMontage, &UZCCombatComponent::HandleAttackMontageEnded))
@@ -105,9 +111,14 @@ bool UZCCombatComponent::RequestSheath()
 	}
 
 	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Sheathing;
 	if (PlayMontage(SheathSwordMontage, &UZCCombatComponent::HandleSheathMontageEnded))
 	{
+		ScheduleAttachmentSwitch(
+			EZCWeaponAttachmentState::Sheathed,
+			SheathSwordMontage,
+			SheathAttachmentNormalizedTime);
 		return true;
 	}
 
@@ -139,6 +150,7 @@ bool UZCCombatComponent::PlayMontage(
 
 void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
+	ClearAttachmentTimer();
 	if (WeaponState != EZCWeaponState::Drawing)
 	{
 		return;
@@ -170,6 +182,7 @@ void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const b
 
 void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
+	ClearAttachmentTimer();
 	if (WeaponState != EZCWeaponState::Sheathing)
 	{
 		return;
@@ -189,6 +202,13 @@ void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const b
 
 void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentState AttachmentState)
 {
+	if (GetWorld()
+		&& GetWorld()->GetTimerManager().IsTimerActive(AttachmentTimerHandle)
+		&& PendingAttachmentState == AttachmentState)
+	{
+		ClearAttachmentTimer();
+	}
+
 	if (!CharacterMesh)
 	{
 		return;
@@ -220,6 +240,64 @@ void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentSt
 	if (ShieldMesh)
 	{
 		ShieldMesh->AttachToComponent(CharacterMesh, AttachmentRules, ShieldBackSocket);
+	}
+}
+
+float UZCCombatComponent::CalculateAttachmentDelay(const float MontageLength, const float NormalizedTime)
+{
+	if (MontageLength <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const float ClampedTime = FMath::Clamp(NormalizedTime, 0.0f, 1.0f);
+	return FMath::Min(MontageLength * ClampedTime, FMath::Max(0.0f, MontageLength - 0.001f));
+}
+
+void UZCCombatComponent::ScheduleAttachmentSwitch(
+	const EZCWeaponAttachmentState AttachmentState,
+	const UAnimMontage* Montage,
+	const float NormalizedTime)
+{
+	if (!Montage || !GetWorld())
+	{
+		return;
+	}
+
+	PendingAttachmentState = AttachmentState;
+	const float Delay = CalculateAttachmentDelay(Montage->GetPlayLength(), NormalizedTime);
+	if (Delay <= 0.0f)
+	{
+		HandleAttachmentTimerElapsed();
+		return;
+	}
+
+	GetWorld()->GetTimerManager().SetTimer(
+		AttachmentTimerHandle,
+		this,
+		&UZCCombatComponent::HandleAttachmentTimerElapsed,
+		Delay,
+		false);
+}
+
+void UZCCombatComponent::ClearAttachmentTimer()
+{
+	if (GetWorld())
+	{
+		GetWorld()->GetTimerManager().ClearTimer(AttachmentTimerHandle);
+	}
+}
+
+void UZCCombatComponent::HandleAttachmentTimerElapsed()
+{
+	const bool bExpectedState =
+		(PendingAttachmentState == EZCWeaponAttachmentState::Equipped
+			&& WeaponState == EZCWeaponState::Drawing)
+		|| (PendingAttachmentState == EZCWeaponAttachmentState::Sheathed
+			&& WeaponState == EZCWeaponState::Sheathing);
+	if (bExpectedState)
+	{
+		SetEquipmentAttachmentState(PendingAttachmentState);
 	}
 }
 

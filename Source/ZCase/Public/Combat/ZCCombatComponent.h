@@ -66,6 +66,7 @@ public:
 	bool IsWeaponEquippedForAnimation() const;
 
 	static EZCWeaponCommand ResolveAttackCommand(EZCWeaponState State);
+	static float CalculateAttachmentDelay(float MontageLength, float NormalizedTime);
 
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	void StartAttack();
@@ -93,6 +94,12 @@ private:
 	void ClearAutoSheathTimer();
 	void HandleAutoSheathElapsed();
 	void FinishAttack();
+	void ScheduleAttachmentSwitch(
+		EZCWeaponAttachmentState AttachmentState,
+		const UAnimMontage* Montage,
+		float NormalizedTime);
+	void ClearAttachmentTimer();
+	void HandleAttachmentTimerElapsed();
 
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
 	TObjectPtr<UAnimMontage> DrawSwordMontage;
@@ -105,6 +112,14 @@ private:
 
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon", meta = (ClampMin = "0.1"))
 	float AutoSheathDelay = 5.0f;
+
+	/** Normalized point in the draw montage where the hand takes ownership of the equipment. */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon|Animation", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float DrawAttachmentNormalizedTime = 0.35f;
+
+	/** Normalized point in the sheath montage where the equipment is seated on the back. */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon|Animation", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SheathAttachmentNormalizedTime = 0.70f;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Weapon")
 	EZCWeaponState WeaponState = EZCWeaponState::Sheathed;
@@ -134,6 +149,8 @@ private:
 	FName ShieldBackSocket = TEXT("ShieldBack");
 
 	FTimerHandle AutoSheathTimerHandle;
+	FTimerHandle AttachmentTimerHandle;
+	EZCWeaponAttachmentState PendingAttachmentState = EZCWeaponAttachmentState::Sheathed;
 	bool bAttackActive = false;
 	bool bTraceActive = false;
 	TSet<TWeakObjectPtr<AActor>> HitActors;
