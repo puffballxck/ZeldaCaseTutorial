@@ -32,6 +32,7 @@ class UZCRuneRuntimeComponent;
 class UZCAttributeComponent;
 class UZCCombatComponent;
 class UZCTargetLockComponent;
+class UStaticMeshComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FZCStaminaChangedSignature,
@@ -114,6 +115,9 @@ public:
 	UPROPERTY(editAnywhere,category="Inputs")
 	UInputAction* InteractAction;
 
+	UPROPERTY(EditAnywhere, Category="Inputs")
+	UInputAction* AttackAction;
+
 	UPROPERTY(VisibleInstanceOnly,BlueprintReadOnly,category="Movements")
 	EMovementTypes CurrentMT{ EMovementTypes ::MT_EMAX};
 
@@ -185,6 +189,15 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
 	TObjectPtr<UZCCombatComponent> Combat;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
+	TObjectPtr<UStaticMeshComponent> SwordMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
+	TObjectPtr<UStaticMeshComponent> SheathMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
+	TObjectPtr<UStaticMeshComponent> ShieldMesh;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Target Lock")
 	TObjectPtr<UZCTargetLockComponent> TargetLock;
@@ -271,6 +284,9 @@ protected:
 
 	UFUNCTION()
 	void Interact_Started(const FInputActionValue& val);
+
+	UFUNCTION()
+	void Attack_Started(const FInputActionValue& val);
 	
 #pragma endregion
 	

@@ -24,6 +24,9 @@
 #include "Combat/ZCAttributeComponent.h"
 #include "Combat/ZCCombatComponent.h"
 #include "Combat/ZCTargetLockComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "InputAction.h"
+#include "UObject/ConstructorHelpers.h"
 
 
 AZCCharBase::AZCCharBase()
@@ -78,6 +81,34 @@ AZCCharBase::AZCCharBase()
 	Attributes = CreateDefaultSubobject<UZCAttributeComponent>(TEXT("Attributes"));
 	Combat = CreateDefaultSubobject<UZCCombatComponent>(TEXT("Combat"));
 	TargetLock = CreateDefaultSubobject<UZCTargetLockComponent>(TEXT("TargetLock"));
+
+	SwordMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SwordMesh"));
+	SwordMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
+	SwordMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	SheathMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SheathMesh"));
+	SheathMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
+	SheathMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	ShieldMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShieldMesh"));
+	ShieldMesh->SetupAttachment(GetMesh(), TEXT("ShieldBack"));
+	ShieldMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SwordFinder(
+		TEXT("/Game/Assets/Equipment/Sword/MasterSword.MasterSword"));
+	SwordMesh->SetStaticMesh(SwordFinder.Object);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SheathFinder(
+		TEXT("/Game/Assets/Equipment/Sheath/Sheath.Sheath"));
+	SheathMesh->SetStaticMesh(SheathFinder.Object);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ShieldFinder(
+		TEXT("/Game/Assets/Equipment/Sheild/HylianSheild.HylianSheild"));
+	ShieldMesh->SetStaticMesh(ShieldFinder.Object);
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> AttackActionFinder(
+		TEXT("/Game/_Game/Data/Inputs/IA_Attack.IA_Attack"));
+	AttackAction = AttackActionFinder.Object;
 	PhysicsHandle->LinearDamping = 100.0f;//线性阻尼
 	PhysicsHandle->LinearStiffness = 325.0f;//硬度
 	PhysicsHandle->AngularDamping = 250.0f;//环形阻尼
@@ -116,6 +147,11 @@ void AZCCharBase::BeginPlay()
 	if (RuneRuntime)
 	{
 		RuneRuntime->OnActiveRuneChanged.AddDynamic(this, &AZCCharBase::HandleActiveRuneChanged);
+	}
+
+	if (Combat)
+	{
+		Combat->InitializeEquipment(GetMesh(), SwordMesh, SheathMesh, ShieldMesh);
 	}
 
 	//为磁铁吸附技能事先筛选场景中的Actor，存放在AllMagSMs数组中
@@ -451,6 +487,19 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	EIComp->BindAction(ReleaseRuneAction,ETriggerEvent::Started,this,&AZCCharBase::ReleaseRune_Started);
 
 	EIComp->BindAction(InteractAction,ETriggerEvent::Started,this,&AZCCharBase::Interact_Started);
+
+	if (AttackAction)
+	{
+		EIComp->BindAction(AttackAction, ETriggerEvent::Started, this, &AZCCharBase::Attack_Started);
+	}
+}
+
+void AZCCharBase::Attack_Started(const FInputActionValue& val)
+{
+	if (Combat)
+	{
+		Combat->HandleAttackInput();
+	}
 }
 void AZCCharBase::LocomotionManager(EMovementTypes NewMovement)
 {

@@ -79,6 +79,36 @@ bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZCWeaponInputPolicyTest,
+	"ZCase.Combat.WeaponInputPolicy",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZCWeaponInputPolicyTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Attack input draws a sheathed weapon"),
+		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Sheathed),
+		EZCWeaponCommand::Draw);
+	TestEqual(
+		TEXT("Attack input attacks with an equipped weapon"),
+		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Equipped),
+		EZCWeaponCommand::Attack);
+	TestEqual(
+		TEXT("Attack input is ignored while drawing"),
+		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Drawing),
+		EZCWeaponCommand::None);
+	TestEqual(
+		TEXT("Attack input is ignored during an attack"),
+		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Attacking),
+		EZCWeaponCommand::None);
+	TestEqual(
+		TEXT("Attack input is ignored while sheathing"),
+		UZCCombatComponent::ResolveAttackCommand(EZCWeaponState::Sheathing),
+		EZCWeaponCommand::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockLifecycleTest,
 	"ZCase.TargetLock.ValidationAndLifecycle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

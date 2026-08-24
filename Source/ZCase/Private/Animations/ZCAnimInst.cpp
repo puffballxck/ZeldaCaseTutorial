@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Animations/ZCAnimInst.h"
+#include "Combat/ZCCombatComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 
 void UZCAnimInst::NativeInitializeAnimation()
@@ -24,4 +25,5 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	bShouldMove = !bIsFalling && GroundSpeed >5.0f && MoveComp->GetCurrentAcceleration().Size()>0;
 	bIsGliding = PlayerRef->CurrentMT == EMovementTypes::MT_Gliding;
 	bReadyToThrow = PlayerRef->bReadyToThrow;
+	bWeaponEquipped = PlayerRef->Combat && PlayerRef->Combat->IsWeaponEquippedForAnimation();
 }

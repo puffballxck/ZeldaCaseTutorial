@@ -42,4 +42,7 @@ public:
 	
 	UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category ="References")
 	bool bReadyToThrow = false;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References")
+	bool bWeaponEquipped = false;
 };
