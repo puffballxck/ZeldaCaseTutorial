@@ -114,6 +114,34 @@ bool FZCWeaponInputPolicyTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 动画基础姿势跟随实际挂点切换，不应等待 Drawing/Sheathing Montage 的结束回调。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZCWeaponAnimationPoseStateTest,
+	"ZCase.Combat.WeaponAnimationPoseState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZCWeaponAnimationPoseStateTest::RunTest(const FString& Parameters)
+{
+	UZCCombatComponent* Combat = NewObject<UZCCombatComponent>();
+
+	Combat->SetEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
+	TestFalse(
+		TEXT("Sheathed attachment selects the unarmed animation pose"),
+		Combat->IsWeaponEquippedForAnimation());
+
+	Combat->SetEquipmentAttachmentState(EZCWeaponAttachmentState::Equipped);
+	TestTrue(
+		TEXT("Equipped attachment selects the armed animation pose before montage end"),
+		Combat->IsWeaponEquippedForAnimation());
+
+	Combat->SetEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
+	TestFalse(
+		TEXT("Returning to the sheath selects the unarmed animation pose"),
+		Combat->IsWeaponEquippedForAnimation());
+
+	return true;
+}
+
 // 蒙太奇配置测试保护 ABP 使用的 FullBody 插槽，以及装备切换发生在动画结束前。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponMontageConfigurationTest,

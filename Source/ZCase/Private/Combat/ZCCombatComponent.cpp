@@ -39,6 +39,7 @@ void UZCCombatComponent::InitializeEquipment(
 	SheathMesh = InSheathMesh;
 	ShieldMesh = InShieldMesh;
 	WeaponState = EZCWeaponState::Sheathed;
+	AnimationAttachmentState = EZCWeaponAttachmentState::Sheathed;
 	// 初始时所有装备都放在背部挂点，后续由状态机和动画时序切换。
 	SetEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
 }
@@ -219,6 +220,9 @@ void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentSt
 		ClearAttachmentTimer();
 	}
 
+	// 动画基础姿势必须在实际挂点切换的同一调用中更新，不能等 Montage 结束回调。
+	AnimationAttachmentState = AttachmentState;
+
 	if (!CharacterMesh)
 	{
 		return;
@@ -317,10 +321,8 @@ void UZCCombatComponent::HandleAttachmentTimerElapsed()
 
 bool UZCCombatComponent::IsWeaponEquippedForAnimation() const
 {
-	// 收刀动画仍按“武器已装备”驱动 FullBody 动画层，直到切换完成。
-	return WeaponState == EZCWeaponState::Equipped
-		|| WeaponState == EZCWeaponState::Attacking
-		|| WeaponState == EZCWeaponState::Sheathing;
+	// 该接口描述的是基础动画姿势，而非战斗输入状态；挂点接管后即可提前准备下一套 Pose。
+	return AnimationAttachmentState == EZCWeaponAttachmentState::Equipped;
 }
 
 void UZCCombatComponent::ScheduleAutoSheath()

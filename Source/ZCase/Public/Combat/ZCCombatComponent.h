@@ -152,6 +152,15 @@ private:
 	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Weapon")
 	EZCWeaponState WeaponState = EZCWeaponState::Sheathed;
 
+	/**
+	 * 驱动动画基础姿势的实际装备挂点状态。
+	 *
+	 * 与 WeaponState 分离：WeaponState 在整段拔刀/收刀 Montage 期间保持过渡态，
+	 * 而该值在接触帧切换挂点时更新，使 AnimBP 能在 Montage 结束前准备下一套基础姿势。
+	 */
+	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Weapon")
+	EZCWeaponAttachmentState AnimationAttachmentState = EZCWeaponAttachmentState::Sheathed;
+
 	UPROPERTY(Transient)
 	TObjectPtr<USkeletalMeshComponent> CharacterMesh;
 
