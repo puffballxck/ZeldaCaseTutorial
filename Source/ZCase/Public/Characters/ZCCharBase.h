@@ -115,6 +115,7 @@ public:
 	UPROPERTY(editAnywhere,category="Inputs")
 	UInputAction* InteractAction;
 
+	/** Enhanced Input 的攻击动作，接线后交给 Combat 组件按武器状态解释。 */
 	UPROPERTY(EditAnywhere, Category="Inputs")
 	UInputAction* AttackAction;
 
@@ -184,21 +185,27 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Runes")
 	TObjectPtr<UZCRuneRuntimeComponent> RuneRuntime;
 
+	/** 负责生命值、伤害钳制和一次性死亡事件。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
 	TObjectPtr<UZCAttributeComponent> Attributes;
 
+	/** 负责武器状态机、攻击命中窗口和装备挂点。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat")
 	TObjectPtr<UZCCombatComponent> Combat;
 
+	/** 可切换到手部或剑鞘挂点的剑网格。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
 	TObjectPtr<UStaticMeshComponent> SwordMesh;
 
+	/** 始终附着在背部剑鞘挂点的剑鞘网格。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
 	TObjectPtr<UStaticMeshComponent> SheathMesh;
 
+	/** 在左手盾牌挂点与背部挂点之间切换的盾牌网格。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat|Equipment")
 	TObjectPtr<UStaticMeshComponent> ShieldMesh;
 
+	/** 持有并验证当前目标锁定对象。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Target Lock")
 	TObjectPtr<UZCTargetLockComponent> TargetLock;
 	
@@ -285,6 +292,7 @@ protected:
 	UFUNCTION()
 	void Interact_Started(const FInputActionValue& val);
 
+	/** Enhanced Input 的攻击 Started 回调；仅把输入转发给战斗组件。 */
 	UFUNCTION()
 	void Attack_Started(const FInputActionValue& val);
 	
@@ -295,13 +303,16 @@ public:
 	
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
+	/** 将引擎伤害先交给父类，再由 Attributes 统一处理生命值和死亡状态。 */
 	virtual float TakeDamage(
 		float DamageAmount,
 		struct FDamageEvent const& DamageEvent,
 		class AController* EventInstigator,
 		AActor* DamageCauser) override;
 
+	/** 死亡角色不再允许新的目标锁定。 */
 	virtual bool CanBeTargetLocked() const override;
+	/** 返回目标锁定使用的角色世界位置。 */
 	virtual FVector GetTargetLockLocation() const override;
 	
 #pragma region Locomotion

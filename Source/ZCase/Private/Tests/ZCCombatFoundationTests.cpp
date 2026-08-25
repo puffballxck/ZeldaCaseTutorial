@@ -10,6 +10,7 @@
 #include "GameFramework/Actor.h"
 #include "Misc/AutomationTest.h"
 
+// 属性测试覆盖最大生命值/当前生命值钳制，以及死亡事件只允许完成一次。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAttributeClampingTest,
 	"ZCase.Attributes.Clamping",
@@ -28,6 +29,7 @@ bool FZCAttributeClampingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 伤害测试确认负伤害不治疗、致死伤害被截断，并且死亡后的重复伤害不会生效。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAttributeDamageAndDeathTest,
 	"ZCase.Attributes.DamageAndDeathAreIdempotent",
@@ -53,6 +55,7 @@ bool FZCAttributeDamageAndDeathTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 命中窗口测试确认攻击生命周期、窗口开关和同一攻击内的目标去重边界。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCCombatHitWindowTest,
 	"ZCase.Combat.HitWindowAndDeduplication",
@@ -74,11 +77,13 @@ bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A closed trace window rejects hits"), Combat->TryApplyHit(Target, 10.0f));
 
 	Combat->StartAttack();
+	// 新攻击必须重置去重集合，使同一目标可以再次受击。
 	Combat->BeginTrace();
 	TestTrue(TEXT("A new attack clears the hit set"), Combat->TryApplyHit(Target, 10.0f));
 	return true;
 }
 
+// 输入策略测试固定 Sheathed -> Draw、Equipped -> Attack，其余过渡态忽略输入。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponInputPolicyTest,
 	"ZCase.Combat.WeaponInputPolicy",
@@ -109,6 +114,7 @@ bool FZCWeaponInputPolicyTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 蒙太奇配置测试保护 ABP 使用的 FullBody 插槽，以及装备切换发生在动画结束前。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponMontageConfigurationTest,
 	"ZCase.Combat.WeaponMontageConfiguration",
@@ -144,6 +150,7 @@ bool FZCWeaponMontageConfigurationTest::RunTest(const FString& Parameters)
 
 	const float DrawDelay = UZCCombatComponent::CalculateAttachmentDelay(1.24f, 0.35f);
 	const float SheathDelay = UZCCombatComponent::CalculateAttachmentDelay(0.92f, 0.70f);
+	// 默认 35% 拔刀、70% 收刀时刻对应可复现的 Timer 延迟。
 	TestTrue(TEXT("Draw attachment switches before the montage ends"), DrawDelay > 0.0f && DrawDelay < 1.24f);
 	TestTrue(TEXT("Sheath attachment switches before the montage ends"), SheathDelay > 0.0f && SheathDelay < 0.92f);
 	TestEqual(TEXT("Draw attachment default time is stable"), DrawDelay, 0.434f, 0.001f);
@@ -151,6 +158,7 @@ bool FZCWeaponMontageConfigurationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 目标锁定生命周期测试覆盖接口校验、替换/清除和目标销毁后的自动清理。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockLifecycleTest,
 	"ZCase.TargetLock.ValidationAndLifecycle",

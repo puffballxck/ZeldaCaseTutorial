@@ -43,6 +43,7 @@ public:
 	UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category ="References")
 	bool bReadyToThrow = false;
 
+	/** 由战斗组件的武器状态驱动；供 AnimBP 判断当前是否使用装备战斗姿态。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References")
 	bool bWeaponEquipped = false;
 };

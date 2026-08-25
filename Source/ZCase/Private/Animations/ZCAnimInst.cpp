@@ -25,5 +25,6 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	bShouldMove = !bIsFalling && GroundSpeed >5.0f && MoveComp->GetCurrentAcceleration().Size()>0;
 	bIsGliding = PlayerRef->CurrentMT == EMovementTypes::MT_Gliding;
 	bReadyToThrow = PlayerRef->bReadyToThrow;
+	// 拔刀完成后才进入装备姿势；攻击和收刀期间继续保持该姿势，直到收刀结束。
 	bWeaponEquipped = PlayerRef->Combat && PlayerRef->Combat->IsWeaponEquippedForAnimation();
 }

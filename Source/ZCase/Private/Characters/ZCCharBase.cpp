@@ -78,19 +78,23 @@ AZCCharBase::AZCCharBase()
 
 	PhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PhysicsHandle"));
 	RuneRuntime = CreateDefaultSubobject<UZCRuneRuntimeComponent>(TEXT("RuneRuntime"));
+	// 三个组件分别承载属性、战斗状态机和目标锁定生命周期，保持职责分离。
 	Attributes = CreateDefaultSubobject<UZCAttributeComponent>(TEXT("Attributes"));
 	Combat = CreateDefaultSubobject<UZCCombatComponent>(TEXT("Combat"));
 	TargetLock = CreateDefaultSubobject<UZCTargetLockComponent>(TEXT("TargetLock"));
 
 	SwordMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SwordMesh"));
+	// 默认先挂在背部；Combat 初始化后会按状态机和动画时序切换到手部。
 	SwordMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
 	SwordMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	SheathMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SheathMesh"));
+	// 剑鞘固定在背部挂点，剑本体负责在手部和剑鞘之间切换。
 	SheathMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
 	SheathMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	ShieldMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShieldMesh"));
+	// 盾牌初始位于背部，拔刀完成后由 Combat 切换到左手挂点。
 	ShieldMesh->SetupAttachment(GetMesh(), TEXT("ShieldBack"));
 	ShieldMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
@@ -126,8 +130,7 @@ void AZCCharBase::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Input setup is local-player-only. Gameplay state must still initialize for
-	// non-local pawns, AI, servers, and editor-created instances.
+	// 输入接线只对本地玩家生效，但战斗状态仍必须为 AI、服务器和编辑器实例初始化。
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
@@ -151,6 +154,7 @@ void AZCCharBase::BeginPlay()
 
 	if (Combat)
 	{
+		// BeginPlay 时把角色网格和三件装备交给 Combat，建立统一的挂点控制入口。
 		Combat->InitializeEquipment(GetMesh(), SwordMesh, SheathMesh, ShieldMesh);
 	}
 
@@ -201,12 +205,14 @@ float AZCCharBase::TakeDamage(
 	AController* EventInstigator,
 	AActor* DamageCauser)
 {
+	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门。
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	return Attributes ? Attributes->ApplyDamage(EngineDamage).AppliedDamage : EngineDamage;
 }
 
 bool AZCCharBase::CanBeTargetLocked() const
 {
+	// 没有属性组件时保持兼容；有属性组件时死亡角色不能成为锁定目标。
 	return !Attributes || !Attributes->IsDead();
 }
 
@@ -490,6 +496,7 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 
 	if (AttackAction)
 	{
+		// 使用 Started 事件把 IA_Attack 接到角色回调，再由 Combat 决定拔刀或攻击。
 		EIComp->BindAction(AttackAction, ETriggerEvent::Started, this, &AZCCharBase::Attack_Started);
 	}
 }
@@ -498,6 +505,7 @@ void AZCCharBase::Attack_Started(const FInputActionValue& val)
 {
 	if (Combat)
 	{
+		// 角色不直接修改武器状态，避免输入层绕过 Combat 的状态机策略。
 		Combat->HandleAttackInput();
 	}
 }
