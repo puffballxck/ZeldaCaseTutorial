@@ -9,6 +9,7 @@
 class UAnimMontage;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
+struct FActorComponentTickFunction;
 
 UENUM(BlueprintType)
 enum class EZCWeaponState : uint8
@@ -85,6 +86,17 @@ public:
 	static EZCWeaponCommand ResolveAttackCommand(EZCWeaponState State);
 	/** 按蒙太奇长度和归一化时刻计算装备切换 Timer 延迟。 */
 	static float CalculateAttachmentDelay(float MontageLength, float NormalizedTime);
+	/** 将采样段数限制在可控范围，避免配置值导致每帧产生过多 Sweep。 */
+	static int32 NormalizeTraceSampleSegments(int32 RequestedSegments);
+	/** 生成上一帧与当前帧的剑身采样点，供 Sweep 和自动化测试共用。 */
+	static void BuildTraceSamplePositions(
+		const FVector& PreviousBase,
+		const FVector& PreviousTip,
+		const FVector& CurrentBase,
+		const FVector& CurrentTip,
+		int32 SampleSegments,
+		TArray<FVector>& OutPreviousSamples,
+		TArray<FVector>& OutCurrentSamples);
 
 	/** 开启一次攻击生命周期，并清空该次攻击的已命中集合。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
@@ -106,7 +118,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
 	bool IsTraceActive() const { return bTraceActive; }
 
+	/** 当前攻击窗口是否已开启，供组件生命周期测试和调试使用。 */
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
+	bool IsAttackActive() const { return bAttackActive; }
+
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 private:
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
+	bool GetTraceSocketLocations(FVector& OutBase, FVector& OutTip);
+	void DisableTraceTick();
 	bool StartDraw();
 	bool StartWeaponAttack();
 	bool PlayMontage(UAnimMontage* Montage, void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool));
@@ -201,4 +225,32 @@ private:
 	bool bTraceActive = false;
 	/** 本次攻击已经命中的目标集合，用于去重。 */
 	TSet<TWeakObjectPtr<AActor>> HitActors;
+
+	/** 当前攻击窗口的伤害值。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace", meta = (ClampMin = "0.0"))
+	float TraceDamage = 25.0f;
+	/** 剑身 Sweep 球体半径，单位为厘米。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace", meta = (ClampMin = "0.0"))
+	float TraceRadius = 8.0f;
+	/** 武器 Sweep 使用的碰撞通道。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace")
+	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_Pawn;
+	/** 沿剑身划分的采样段数；实际每帧 Sweep 点数为段数加一。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace", meta = (ClampMin = "1", ClampMax = "32"))
+	int32 TraceSampleSegments = 4;
+	/** 是否在编辑器/开发构建中绘制当前剑身轨迹。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace")
+	bool bDebugDrawTrace = false;
+	/** 剑身根部和尖端的 Static Mesh socket。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace|Sockets")
+	FName TraceBaseSocket = TEXT("Trace_Base");
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace|Sockets")
+	FName TraceTipSocket = TEXT("Trace_Tip");
+
+	/** 上一次 Tick 的 socket 位置；窗口第一次 Tick 只建立基线，不产生跨帧 Sweep。 */
+	FVector PreviousTraceBase = FVector::ZeroVector;
+	FVector PreviousTraceTip = FVector::ZeroVector;
+	bool bHasPreviousTracePositions = false;
+	/** 避免缺失 Mesh/socket 时每帧刷屏，同时保留一次可定位的警告。 */
+	bool bTraceConfigurationWarningLogged = false;
 };

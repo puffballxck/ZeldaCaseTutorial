@@ -7,6 +7,9 @@
 #include "Combat/ZCTargetLockComponent.h"
 #include "Characters/ZCCharBase.h"
 #include "Animation/AnimMontage.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshSocket.h"
 #include "GameFramework/Actor.h"
 #include "Misc/AutomationTest.h"
 
@@ -63,7 +66,21 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 {
-	UZCCombatComponent* Combat = NewObject<UZCCombatComponent>();
+	// 为命中窗口测试提供最小的瞬态武器和两个 socket，避免把“缺少配置”的安全失败与正常去重逻辑混在一起。
+	AActor* Owner = NewObject<AActor>();
+	UStaticMeshComponent* SwordMesh = NewObject<UStaticMeshComponent>(Owner);
+	UStaticMesh* RuntimeMesh = NewObject<UStaticMesh>(Owner);
+	UStaticMeshSocket* BaseSocket = NewObject<UStaticMeshSocket>(RuntimeMesh);
+	BaseSocket->SocketName = TEXT("Trace_Base");
+	BaseSocket->RelativeLocation = FVector::ZeroVector;
+	RuntimeMesh->AddSocket(BaseSocket);
+	UStaticMeshSocket* TipSocket = NewObject<UStaticMeshSocket>(RuntimeMesh);
+	TipSocket->SocketName = TEXT("Trace_Tip");
+	TipSocket->RelativeLocation = FVector(0.0f, 0.0f, 100.0f);
+	RuntimeMesh->AddSocket(TipSocket);
+	SwordMesh->SetStaticMesh(RuntimeMesh);
+	UZCCombatComponent* Combat = NewObject<UZCCombatComponent>(Owner);
+	Combat->InitializeEquipment(nullptr, SwordMesh, nullptr, nullptr);
 	AActor* Target = NewObject<AActor>();
 
 	TestFalse(TEXT("An invalid target is rejected"), Combat->TryApplyHit(nullptr, 10.0f));
@@ -80,6 +97,36 @@ bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 	// 新攻击必须重置去重集合，使同一目标可以再次受击。
 	Combat->BeginTrace();
 	TestTrue(TEXT("A new attack clears the hit set"), Combat->TryApplyHit(Target, 10.0f));
+	return true;
+}
+
+// 武器轨迹采样测试保护配置钳制、采样数量，以及上一帧/当前帧的剑身端点插值。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZCCombatTraceSamplingTest,
+	"ZCase.Combat.TraceSampling",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZCCombatTraceSamplingTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("Trace segments have a safe lower bound"), UZCCombatComponent::NormalizeTraceSampleSegments(0), 1);
+	TestEqual(TEXT("Trace segments have a safe upper bound"), UZCCombatComponent::NormalizeTraceSampleSegments(100), 32);
+	TestEqual(TEXT("Trace segments preserve valid configuration"), UZCCombatComponent::NormalizeTraceSampleSegments(4), 4);
+
+	TArray<FVector> PreviousSamples;
+	TArray<FVector> CurrentSamples;
+	UZCCombatComponent::BuildTraceSamplePositions(
+		FVector(0.0f, 0.0f, 0.0f),
+		FVector(0.0f, 0.0f, 100.0f),
+		FVector(10.0f, 0.0f, 0.0f),
+		FVector(10.0f, 0.0f, 100.0f),
+		4,
+		PreviousSamples,
+		CurrentSamples);
+
+	TestEqual(TEXT("Sample count is segments plus endpoints"), PreviousSamples.Num(), 5);
+	TestEqual(TEXT("Previous sample starts at the blade base"), PreviousSamples[0], FVector(0.0f, 0.0f, 0.0f));
+	TestEqual(TEXT("Previous sample ends at the blade tip"), PreviousSamples.Last(), FVector(0.0f, 0.0f, 100.0f));
+	TestEqual(TEXT("Current sample interpolates along the blade"), CurrentSamples[2], FVector(10.0f, 0.0f, 50.0f));
 	return true;
 }
 

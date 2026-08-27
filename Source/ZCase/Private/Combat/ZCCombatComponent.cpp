@@ -6,6 +6,8 @@
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
@@ -13,7 +15,11 @@
 
 UZCCombatComponent::UZCCombatComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	// Trace 只在 NotifyState 打开的攻击窗口内 Tick，避免常态下产生无意义的碰撞查询。
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
+	// 在动画和角色移动更新后读取附着武器的位置，避免 Sweep 使用上一阶段的骨骼变换。
+	PrimaryComponentTick.TickGroup = TG_PostPhysics;
 
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> DrawMontageFinder(
 		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_DrawSword.AM_DrawSword"));
@@ -34,6 +40,9 @@ void UZCCombatComponent::InitializeEquipment(
 	UStaticMeshComponent* InSheathMesh,
 	UStaticMeshComponent* InShieldMesh)
 {
+	// 重新绑定装备时切断旧攻击生命周期，避免旧的 Notify/Tick 继续使用已失效的 socket。
+	EndTrace();
+	bAttackActive = false;
 	CharacterMesh = InCharacterMesh;
 	SwordMesh = InSwordMesh;
 	SheathMesh = InSheathMesh;
@@ -270,6 +279,33 @@ float UZCCombatComponent::CalculateAttachmentDelay(const float MontageLength, co
 	return FMath::Min(MontageLength * ClampedTime, FMath::Max(0.0f, MontageLength - 0.001f));
 }
 
+int32 UZCCombatComponent::NormalizeTraceSampleSegments(const int32 RequestedSegments)
+{
+	// 上限是保护性约束：Sweep 数量应由动画配置控制，但不能因误填值拖垮每帧查询。
+	return FMath::Clamp(RequestedSegments, 1, 32);
+}
+
+void UZCCombatComponent::BuildTraceSamplePositions(
+	const FVector& PreviousBase,
+	const FVector& PreviousTip,
+	const FVector& CurrentBase,
+	const FVector& CurrentTip,
+	const int32 SampleSegments,
+	TArray<FVector>& OutPreviousSamples,
+	TArray<FVector>& OutCurrentSamples)
+{
+	const int32 SafeSegments = NormalizeTraceSampleSegments(SampleSegments);
+	OutPreviousSamples.Reset(SafeSegments + 1);
+	OutCurrentSamples.Reset(SafeSegments + 1);
+
+	for (int32 SampleIndex = 0; SampleIndex <= SafeSegments; ++SampleIndex)
+	{
+		const float Alpha = static_cast<float>(SampleIndex) / static_cast<float>(SafeSegments);
+		OutPreviousSamples.Add(FMath::Lerp(PreviousBase, PreviousTip, Alpha));
+		OutCurrentSamples.Add(FMath::Lerp(CurrentBase, CurrentTip, Alpha));
+	}
+}
+
 void UZCCombatComponent::ScheduleAttachmentSwitch(
 	const EZCWeaponAttachmentState AttachmentState,
 	const UAnimMontage* Montage,
@@ -359,34 +395,199 @@ void UZCCombatComponent::HandleAutoSheathElapsed()
 
 void UZCCombatComponent::FinishAttack()
 {
-	// 结束攻击时同时关闭生命周期和命中窗口；命中集合在下一次攻击开始时清空。
+	// 结束攻击时同时关闭生命周期、命中窗口和 Tick；命中集合在下一次攻击开始时清空。
+	EndTrace();
 	bAttackActive = false;
-	bTraceActive = false;
 }
 
 void UZCCombatComponent::StartAttack()
 {
+	// 新攻击接管前先关闭旧窗口，保证不会把上一攻击的 Tick/基线带入本次攻击。
+	EndTrace();
 	bAttackActive = true;
-	bTraceActive = false;
 	// 每次攻击独立去重，允许同一目标在下一次攻击再次受击。
 	HitActors.Reset();
 }
 
 bool UZCCombatComponent::BeginTrace()
 {
-	if (!bAttackActive)
+	if (!bAttackActive || !GetTraceSocketLocations(PreviousTraceBase, PreviousTraceTip))
 	{
 		return false;
 	}
 
+	// NotifyState 的 Begin 是唯一打开窗口的入口；先建立上一帧基线，避免武器从挂点瞬移时误扫整段路径。
+	bHasPreviousTracePositions = true;
+	bTraceConfigurationWarningLogged = false;
 	bTraceActive = true;
+	SetComponentTickEnabled(true);
 	return true;
 }
 
 void UZCCombatComponent::EndTrace()
 {
-	// 关闭窗口后即使攻击仍未结束，也不再接受命中。
+	// 关闭窗口后即使攻击仍未结束，也不再接受命中；同时关闭 Tick，形成窗口生命周期不变量。
 	bTraceActive = false;
+	bHasPreviousTracePositions = false;
+	DisableTraceTick();
+}
+
+void UZCCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// 角色销毁/PIE 停止可能绕过 Montage 回调，必须在组件生命周期边界强制关闭残留 Trace。
+	EndTrace();
+	bAttackActive = false;
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
+	Super::EndPlay(EndPlayReason);
+}
+
+void UZCCombatComponent::DisableTraceTick()
+{
+	if (IsComponentTickEnabled())
+	{
+		SetComponentTickEnabled(false);
+	}
+}
+
+bool UZCCombatComponent::GetTraceSocketLocations(FVector& OutBase, FVector& OutTip)
+{
+	if (!SwordMesh)
+	{
+		if (!bTraceConfigurationWarningLogged)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("ZCCombatComponent: Weapon trace skipped because SwordMesh is missing on %s."), *GetNameSafe(GetOwner()));
+			bTraceConfigurationWarningLogged = true;
+		}
+		return false;
+	}
+
+	if (TraceBaseSocket.IsNone() || TraceTipSocket.IsNone()
+		|| !SwordMesh->DoesSocketExist(TraceBaseSocket)
+		|| !SwordMesh->DoesSocketExist(TraceTipSocket))
+	{
+		if (!bTraceConfigurationWarningLogged)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("ZCCombatComponent: Weapon trace skipped on %s because sockets '%s'/'%s' are missing from %s."),
+				*GetNameSafe(GetOwner()),
+				*TraceBaseSocket.ToString(),
+				*TraceTipSocket.ToString(),
+				*GetNameSafe(SwordMesh));
+			bTraceConfigurationWarningLogged = true;
+		}
+		return false;
+	}
+
+	OutBase = SwordMesh->GetSocketLocation(TraceBaseSocket);
+	OutTip = SwordMesh->GetSocketLocation(TraceTipSocket);
+	return true;
+}
+
+void UZCCombatComponent::TickComponent(
+	const float DeltaTime,
+	const ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!bTraceActive)
+	{
+		// 防御性处理：即使外部误留 Tick 开启，也不能在窗口外进行 Sweep。
+		DisableTraceTick();
+		return;
+	}
+
+	if (TraceDamage <= 0.0f || TraceRadius <= 0.0f)
+	{
+		if (!bTraceConfigurationWarningLogged)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("ZCCombatComponent: Weapon trace disabled on %s because Damage (%.2f) and Radius (%.2f) must be positive."),
+				*GetNameSafe(GetOwner()),
+				TraceDamage,
+				TraceRadius);
+			bTraceConfigurationWarningLogged = true;
+		}
+		EndTrace();
+		return;
+	}
+
+	FVector CurrentBase;
+	FVector CurrentTip;
+	if (!GetTraceSocketLocations(CurrentBase, CurrentTip))
+	{
+		EndTrace();
+		return;
+	}
+
+	if (!bHasPreviousTracePositions)
+	{
+		// 首帧只补齐基线，避免 BeginTrace 之后的第一帧把整把剑当成运动轨迹。
+		PreviousTraceBase = CurrentBase;
+		PreviousTraceTip = CurrentTip;
+		bHasPreviousTracePositions = true;
+		return;
+	}
+
+	TArray<FVector> PreviousSamples;
+	TArray<FVector> CurrentSamples;
+	BuildTraceSamplePositions(
+		PreviousTraceBase,
+		PreviousTraceTip,
+		CurrentBase,
+		CurrentTip,
+		TraceSampleSegments,
+		PreviousSamples,
+		CurrentSamples);
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		EndTrace();
+		return;
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ZCWeaponTrace), false, GetOwner());
+	if (SwordMesh)
+	{
+		QueryParams.AddIgnoredComponent(SwordMesh.Get());
+	}
+	const FCollisionShape SweepShape = FCollisionShape::MakeSphere(TraceRadius);
+
+	for (int32 SampleIndex = 0; SampleIndex < CurrentSamples.Num(); ++SampleIndex)
+	{
+		const FVector& Start = PreviousSamples[SampleIndex];
+		const FVector& End = CurrentSamples[SampleIndex];
+		TArray<FHitResult> Hits;
+		const bool bHit = World->SweepMultiByChannel(
+			Hits,
+			Start,
+			End,
+			FQuat::Identity,
+			TraceChannel,
+			SweepShape,
+			QueryParams);
+
+		if (bDebugDrawTrace)
+		{
+			DrawDebugLine(World, Start, End, bHit ? FColor::Red : FColor::Green, false, 0.1f, 0, 1.5f);
+			DrawDebugSphere(World, End, TraceRadius, 8, bHit ? FColor::Red : FColor::Yellow, false, 0.1f, 0, 1.0f);
+		}
+
+		for (const FHitResult& Hit : Hits)
+		{
+			// 所有伤害统一经过 TryApplyHit，集中处理攻击窗口、Owner 排除和同次攻击去重。
+			TryApplyHit(Hit.GetActor(), TraceDamage);
+		}
+	}
+
+	PreviousTraceBase = CurrentBase;
+	PreviousTraceTip = CurrentTip;
 }
 
 bool UZCCombatComponent::TryApplyHit(AActor* Target, const float DamageAmount)
