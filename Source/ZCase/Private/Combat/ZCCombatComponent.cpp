@@ -4,6 +4,7 @@
 
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
+#include "Combat/ZCAttributeComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
@@ -43,6 +44,8 @@ void UZCCombatComponent::InitializeEquipment(
 	// 重新绑定装备时切断旧攻击生命周期，避免旧的 Notify/Tick 继续使用已失效的 socket。
 	EndTrace();
 	bAttackActive = false;
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
 	CharacterMesh = InCharacterMesh;
 	SwordMesh = InSwordMesh;
 	SheathMesh = InSheathMesh;
@@ -71,6 +74,11 @@ EZCWeaponCommand UZCCombatComponent::ResolveAttackCommand(const EZCWeaponState S
 
 bool UZCCombatComponent::HandleAttackInput()
 {
+	if (!CanAcceptCombatInput())
+	{
+		return false;
+	}
+
 	switch (ResolveAttackCommand(WeaponState))
 	{
 	case EZCWeaponCommand::Draw:
@@ -84,6 +92,11 @@ bool UZCCombatComponent::HandleAttackInput()
 
 bool UZCCombatComponent::StartDraw()
 {
+	if (!CanAcceptCombatInput())
+	{
+		return false;
+	}
+
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	// 只有拔刀蒙太奇完成或被打断，才能离开 Drawing 状态。
@@ -103,6 +116,11 @@ bool UZCCombatComponent::StartDraw()
 
 bool UZCCombatComponent::StartWeaponAttack()
 {
+	if (!CanAcceptCombatInput())
+	{
+		return false;
+	}
+
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Attacking;
@@ -121,7 +139,7 @@ bool UZCCombatComponent::StartWeaponAttack()
 
 bool UZCCombatComponent::RequestSheath()
 {
-	if (WeaponState != EZCWeaponState::Equipped)
+	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped)
 	{
 		return false;
 	}
@@ -167,11 +185,11 @@ bool UZCCombatComponent::PlayMontage(
 
 void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
-	ClearAttachmentTimer();
-	if (WeaponState != EZCWeaponState::Drawing)
+	if (Montage != DrawSwordMontage || WeaponState != EZCWeaponState::Drawing)
 	{
 		return;
 	}
+	ClearAttachmentTimer();
 
 	if (bInterrupted)
 	{
@@ -188,7 +206,7 @@ void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const boo
 
 void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
-	if (WeaponState != EZCWeaponState::Attacking)
+	if (Montage != AttackMontage || WeaponState != EZCWeaponState::Attacking)
 	{
 		return;
 	}
@@ -201,11 +219,11 @@ void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const b
 
 void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
-	ClearAttachmentTimer();
-	if (WeaponState != EZCWeaponState::Sheathing)
+	if (Montage != SheathSwordMontage || WeaponState != EZCWeaponState::Sheathing)
 	{
 		return;
 	}
+	ClearAttachmentTimer();
 
 	if (bInterrupted)
 	{
@@ -222,6 +240,12 @@ void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const b
 
 void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentState AttachmentState)
 {
+	// 受击/死亡后忽略旧攻击 Montage 迟到的挂点 Notify。
+	if (!CanAcceptCombatInput())
+	{
+		return;
+	}
+
 	if (GetWorld()
 		&& GetWorld()->GetTimerManager().IsTimerActive(AttachmentTimerHandle)
 		&& PendingAttachmentState == AttachmentState)
@@ -363,7 +387,7 @@ bool UZCCombatComponent::IsWeaponEquippedForAnimation() const
 
 void UZCCombatComponent::ScheduleAutoSheath()
 {
-	if (WeaponState != EZCWeaponState::Equipped || AutoSheathDelay <= 0.0f || !GetWorld())
+	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped || AutoSheathDelay <= 0.0f || !GetWorld())
 	{
 		return;
 	}
@@ -386,7 +410,7 @@ void UZCCombatComponent::ClearAutoSheathTimer()
 
 void UZCCombatComponent::HandleAutoSheathElapsed()
 {
-	if (WeaponState == EZCWeaponState::Equipped)
+	if (CanAcceptCombatInput() && WeaponState == EZCWeaponState::Equipped)
 	{
 		// 只从稳定的 Equipped 状态触发自动收刀，过渡期间的旧 Timer 无效。
 		RequestSheath();
@@ -402,6 +426,11 @@ void UZCCombatComponent::FinishAttack()
 
 void UZCCombatComponent::StartAttack()
 {
+	if (!CanAcceptCombatInput())
+	{
+		return;
+	}
+
 	// 新攻击接管前先关闭旧窗口，保证不会把上一攻击的 Tick/基线带入本次攻击。
 	EndTrace();
 	bAttackActive = true;
@@ -411,7 +440,7 @@ void UZCCombatComponent::StartAttack()
 
 bool UZCCombatComponent::BeginTrace()
 {
-	if (!bAttackActive || !GetTraceSocketLocations(PreviousTraceBase, PreviousTraceTip))
+	if (!CanAcceptCombatInput() || !bAttackActive || !GetTraceSocketLocations(PreviousTraceBase, PreviousTraceTip))
 	{
 		return false;
 	}
@@ -439,7 +468,78 @@ void UZCCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	bAttackActive = false;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	CombatAvailability = EZCCombatAvailability::Disabled;
 	Super::EndPlay(EndPlayReason);
+}
+
+bool UZCCombatComponent::InterruptForHitReaction()
+{
+	if (CombatAvailability == EZCCombatAvailability::Disabled)
+	{
+		return false;
+	}
+
+	// 连续受击由角色重置同一 Montage 的位置；这里保持锁定且不打断该 Montage。
+	if (CombatAvailability == EZCCombatAvailability::Reacting)
+	{
+		return true;
+	}
+
+	CombatAvailability = EZCCombatAvailability::Reacting;
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
+	FinishAttack();
+	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
+		? EZCWeaponState::Equipped
+		: EZCWeaponState::Sheathed;
+
+	if (CharacterMesh)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			AnimInstance->Montage_Stop(0.05f);
+		}
+	}
+	return true;
+}
+
+void UZCCombatComponent::ResumeAfterHitReaction()
+{
+	if (CombatAvailability != EZCCombatAvailability::Reacting)
+	{
+		return;
+	}
+
+	CombatAvailability = EZCCombatAvailability::Enabled;
+	if (WeaponState == EZCWeaponState::Equipped)
+	{
+		ScheduleAutoSheath();
+	}
+}
+
+void UZCCombatComponent::DisableCombat()
+{
+	if (CombatAvailability == EZCCombatAvailability::Disabled)
+	{
+		return;
+	}
+
+	// 先锁定终止状态，让 Montage_Stop 触发的旧回调无法恢复任何战斗动作。
+	CombatAvailability = EZCCombatAvailability::Disabled;
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
+	FinishAttack();
+	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
+		? EZCWeaponState::Equipped
+		: EZCWeaponState::Sheathed;
+
+	if (CharacterMesh)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			AnimInstance->Montage_Stop(0.05f);
+		}
+	}
 }
 
 void UZCCombatComponent::DisableTraceTick()
@@ -582,7 +682,7 @@ void UZCCombatComponent::TickComponent(
 		for (const FHitResult& Hit : Hits)
 		{
 			// 所有伤害统一经过 TryApplyHit，集中处理攻击窗口、Owner 排除和同次攻击去重。
-			TryApplyHit(Hit.GetActor(), TraceDamage);
+			TryApplyHit(Hit, TraceDamage);
 		}
 	}
 
@@ -590,33 +690,60 @@ void UZCCombatComponent::TickComponent(
 	PreviousTraceTip = CurrentTip;
 }
 
-bool UZCCombatComponent::TryApplyHit(AActor* Target, const float DamageAmount)
+FZCCombatHitResult UZCCombatComponent::TryApplyHit(const FHitResult& Hit, const float DamageAmount)
 {
-	if (!bAttackActive || !bTraceActive || !IsValid(Target) || DamageAmount <= 0.0f)
+	FZCCombatHitResult Result;
+	AActor* Target = Hit.GetActor();
+	if (!CanAcceptCombatInput() || !bAttackActive || !bTraceActive || !IsValid(Target)
+		|| !FMath::IsFinite(DamageAmount) || DamageAmount <= 0.0f)
 	{
-		return false;
+		return Result;
 	}
 
 	AActor* Owner = GetOwner();
 	if (Owner && Target == Owner)
 	{
-		return false;
+		return Result;
 	}
 
 	const TWeakObjectPtr<AActor> TargetKey(Target);
 	if (HitActors.Contains(TargetKey))
 	{
 		// 同一次攻击对同一 Actor 只允许一次伤害，防止连续帧重复命中。
-		return false;
+		return Result;
 	}
 
 	HitActors.Add(TargetKey);
+	Result.bRegistered = true;
+	Result.Target = Target;
+	Result.RequestedDamage = DamageAmount;
+	Result.ImpactPoint = Hit.ImpactPoint;
+	Result.ImpactNormal = Hit.ImpactNormal;
+	Result.HitBoneName = Hit.BoneName;
+
+	UZCAttributeComponent* TargetAttributes = Target->FindComponentByClass<UZCAttributeComponent>();
+	const bool bTargetWasDead = TargetAttributes && TargetAttributes->IsDead();
 	AController* InstigatorController = nullptr;
 	if (const APawn* OwnerPawn = Cast<APawn>(Owner))
 	{
 		InstigatorController = OwnerPawn->GetController();
 	}
 
-	UGameplayStatics::ApplyDamage(Target, DamageAmount, InstigatorController, Owner, UDamageType::StaticClass());
-	return true;
+	FVector ShotDirection = (Hit.TraceEnd - Hit.TraceStart).GetSafeNormal();
+	if (ShotDirection.IsNearlyZero())
+	{
+		ShotDirection = Owner ? Owner->GetActorForwardVector() : FVector::ForwardVector;
+	}
+
+	Result.AppliedDamage = UGameplayStatics::ApplyPointDamage(
+		Target,
+		DamageAmount,
+		ShotDirection,
+		Hit,
+		InstigatorController,
+		Owner,
+		UDamageType::StaticClass());
+	Result.bBecameDead = TargetAttributes && !bTargetWasDead && TargetAttributes->IsDead();
+	OnHitResolved.Broadcast(Result);
+	return Result;
 }

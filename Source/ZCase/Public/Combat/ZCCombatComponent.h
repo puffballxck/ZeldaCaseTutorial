@@ -4,12 +4,62 @@
 
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "ZCCombatComponent.generated.h"
 
 class UAnimMontage;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
 struct FActorComponentTickFunction;
+
+UENUM(BlueprintType)
+enum class EZCCombatAvailability : uint8
+{
+	/** 接受战斗输入、动画通知和命中登记。 */
+	Enabled,
+	/** 正在播放受击反应；保留移动和镜头，但暂时拒绝战斗动作。 */
+	Reacting,
+	/** 死亡后的终止状态；陈旧回调不能再次启用战斗。 */
+	Disabled
+};
+
+/** 一次武器接触完成伤害结算后提供给表现层的稳定结果。 */
+USTRUCT(BlueprintType)
+struct ZCASE_API FZCCombatHitResult
+{
+	GENERATED_BODY()
+
+	/** 是否登记为本次攻击对该目标的第一次有效接触。 */
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	bool bRegistered = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	TObjectPtr<AActor> Target = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	float RequestedDamage = 0.0f;
+
+	/** 目标 TakeDamage 返回的实际伤害。 */
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	float AppliedDamage = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	FVector ImpactPoint = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	FVector ImpactNormal = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	FName HitBoneName = NAME_None;
+
+	/** 已知 ZC 属性目标是否由本次接触从存活转为死亡。 */
+	UPROPERTY(BlueprintReadOnly, Category = "ZCase|Combat|Hit")
+	bool bBecameDead = false;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FZCHitResolvedSignature,
+	const FZCCombatHitResult&, Result);
 
 UENUM(BlueprintType)
 enum class EZCWeaponState : uint8
@@ -82,6 +132,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat|Weapon")
 	bool IsWeaponEquippedForAnimation() const;
 
+	/** 返回战斗动作当前是否可用。 */
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
+	bool CanAcceptCombatInput() const { return CombatAvailability == EZCCombatAvailability::Enabled; }
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
+	EZCCombatAvailability GetCombatAvailability() const { return CombatAvailability; }
+
+	/** 打断当前战斗动作并进入受击锁定；死亡后调用不会恢复战斗。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
+	bool InterruptForHitReaction();
+
+	/** 仅允许从受击锁定恢复。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
+	void ResumeAfterHitReaction();
+
+	/** 进入不可逆的死亡禁用状态。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
+	void DisableCombat();
+
 	/** 将攻击输入状态映射为动作；过渡状态统一返回 None。 */
 	static EZCWeaponCommand ResolveAttackCommand(EZCWeaponState State);
 	/** 按蒙太奇长度和归一化时刻计算装备切换 Timer 延迟。 */
@@ -110,9 +179,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	void EndTrace();
 
-	/** 在有效命中窗口内对目标造成一次伤害；同一攻击不会重复命中同一目标。 */
+	/** 在有效命中窗口内结算完整碰撞；同一攻击不会重复命中同一目标。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
-	bool TryApplyHit(AActor* Target, float DamageAmount);
+	FZCCombatHitResult TryApplyHit(const FHitResult& Hit, float DamageAmount);
+
+	/** 每次攻击中首次登记某目标后广播，实际伤害允许为零。 */
+	UPROPERTY(BlueprintAssignable, Category = "ZCase|Combat|Hit")
+	FZCHitResolvedSignature OnHitResolved;
 
 	/** 返回当前是否处于可登记命中的窗口。 */
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
@@ -175,6 +248,10 @@ private:
 	/** 驱动拔刀、攻击和收刀输入策略的武器状态机。 */
 	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Weapon")
 	EZCWeaponState WeaponState = EZCWeaponState::Sheathed;
+
+	/** 独立于武器状态的战斗可用性；死亡会把它锁定为 Disabled。 */
+	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat")
+	EZCCombatAvailability CombatAvailability = EZCCombatAvailability::Enabled;
 
 	/**
 	 * 驱动动画基础姿势的实际装备挂点状态。

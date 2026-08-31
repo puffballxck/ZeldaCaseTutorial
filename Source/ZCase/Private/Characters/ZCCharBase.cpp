@@ -1,14 +1,18 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "Characters/ZCCharBase.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
 #include "Data/ZCPlayerController.h"
 #include "EnhancedInputSubsystems.h"
 #include "EnhancedInputComponent.h"
 #include "Gameplay/ZCRuneRuntimeComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Debug/DebugHelper.h"
 #include "UI/ZCLayout.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Actors/BombBase.h"
 #include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
@@ -28,6 +32,7 @@
 #include "InputAction.h"
 #include "UObject/ConstructorHelpers.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogZCPlayerCombat, Log, All);
 
 AZCCharBase::AZCCharBase()
 {
@@ -152,6 +157,18 @@ void AZCCharBase::BeginPlay()
 		RuneRuntime->OnActiveRuneChanged.AddDynamic(this, &AZCCharBase::HandleActiveRuneChanged);
 	}
 
+	if (Attributes)
+	{
+		Attributes->OnDeath.AddDynamic(this, &AZCCharBase::HandleDeath);
+	}
+
+	if (TargetLock)
+	{
+		TargetLock->OnTargetChanged.AddUniqueDynamic(this, &AZCCharBase::HandleTargetChanged);
+		// 兼容 BeginPlay 前已经设置好的目标，确保移动组件模式与组件状态同步。
+		HandleTargetChanged(nullptr, TargetLock->GetCurrentTarget());
+	}
+
 	if (Combat)
 	{
 		// BeginPlay 时把角色网格和三件装备交给 Combat，建立统一的挂点控制入口。
@@ -182,6 +199,17 @@ void AZCCharBase::BeginPlay()
 
 void AZCCharBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (Attributes)
+	{
+		Attributes->OnDeath.RemoveDynamic(this, &AZCCharBase::HandleDeath);
+	}
+
+	if (TargetLock)
+	{
+		TargetLock->OnTargetChanged.RemoveDynamic(this, &AZCCharBase::HandleTargetChanged);
+		SetTargetLockRotationMode(false);
+	}
+
 	if (RuneRuntime)
 	{
 		// Let the normal transition path clean up spawned previews, held bombs,
@@ -205,15 +233,162 @@ float AZCCharBase::TakeDamage(
 	AController* EventInstigator,
 	AActor* DamageCauser)
 {
+	if (bDeathStarted || !CanBeDamaged() || !FMath::IsFinite(DamageAmount) || DamageAmount <= 0.0f)
+	{
+		return 0.0f;
+	}
+
 	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门。
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
-	return Attributes ? Attributes->ApplyDamage(EngineDamage).AppliedDamage : EngineDamage;
+	if (!Attributes || EngineDamage <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const FZCDamageResult Result = Attributes->ApplyDamage(EngineDamage);
+	if (Result.AppliedDamage <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	// OnDeath 在 ApplyDamage 内同步触发；致死伤害不能先闪出一帧普通受击。
+	if (Result.bBecameDead)
+	{
+		// 保留 OnDeath 作为统一入口，同时为 BeginPlay 前等特殊路径提供幂等兜底。
+		HandleDeath(this);
+	}
+	else
+	{
+		PlayHitReact();
+	}
+	return Result.AppliedDamage;
+}
+
+void AZCCharBase::PlayHitReact()
+{
+	if (bDeathStarted)
+	{
+		return;
+	}
+
+	USkeletalMeshComponent* CharacterMesh = GetMesh();
+	UAnimInstance* AnimInstance = CharacterMesh ? CharacterMesh->GetAnimInstance() : nullptr;
+	if (bHitReactActive && HitReactMontage && AnimInstance && AnimInstance->Montage_IsPlaying(HitReactMontage))
+	{
+		// 重置同一个 Montage，不触发旧结束回调，避免连续受击时提前解除战斗锁定。
+		AnimInstance->Montage_SetPosition(HitReactMontage, 0.0f);
+		return;
+	}
+
+	if (RuneRuntime)
+	{
+		RuneRuntime->CancelAll();
+	}
+	if (Combat && !Combat->InterruptForHitReaction())
+	{
+		return;
+	}
+
+	if (!HitReactMontage || !AnimInstance || AnimInstance->Montage_Play(HitReactMontage) <= 0.0f)
+	{
+		if (!bHitReactDiagnosticIssued)
+		{
+			bHitReactDiagnosticIssued = true;
+			UE_LOG(
+				LogZCPlayerCombat,
+				Warning,
+				TEXT("%s received non-lethal damage but cannot play Hit React: Montage or AnimInstance is missing."),
+				*GetNameSafe(this));
+		}
+		if (Combat)
+		{
+			Combat->ResumeAfterHitReaction();
+		}
+		return;
+	}
+
+	bHitReactActive = true;
+	FOnMontageEnded EndDelegate;
+	EndDelegate.BindUObject(this, &AZCCharBase::HandleHitReactMontageEnded);
+	AnimInstance->Montage_SetEndDelegate(EndDelegate, HitReactMontage);
+}
+
+void AZCCharBase::HandleHitReactMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
+{
+	if (Montage != HitReactMontage)
+	{
+		return;
+	}
+
+	bHitReactActive = false;
+	if (!bDeathStarted && Combat)
+	{
+		Combat->ResumeAfterHitReaction();
+	}
+}
+
+void AZCCharBase::HandleDeath(AActor* DeadActor)
+{
+	if (bDeathStarted || (DeadActor && DeadActor != this))
+	{
+		return;
+	}
+
+	bDeathStarted = true;
+	bHitReactActive = false;
+	SetCanBeDamaged(false);
+	SetActorTickEnabled(false);
+
+	if (RuneRuntime)
+	{
+		RuneRuntime->CancelAll();
+	}
+	if (TargetLock)
+	{
+		TargetLock->ClearTarget();
+	}
+	if (Combat)
+	{
+		Combat->DisableCombat();
+	}
+
+	StopJumping();
+	ClearDrainRecoverStamina();
+	GetWorldTimerManager().ClearTimer(AddGravityForFlyingTimerHandle);
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->DisableMovement();
+	}
+	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	{
+		DisableInput(PlayerController);
+	}
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	}
+
+	USkeletalMeshComponent* CharacterMesh = GetMesh();
+	UAnimInstance* AnimInstance = CharacterMesh ? CharacterMesh->GetAnimInstance() : nullptr;
+	if (!DeathMontage || !AnimInstance || AnimInstance->Montage_Play(DeathMontage) <= 0.0f)
+	{
+		if (!bDeathDiagnosticIssued)
+		{
+			bDeathDiagnosticIssued = true;
+			UE_LOG(
+				LogZCPlayerCombat,
+				Warning,
+				TEXT("%s died but cannot play Death Montage: Montage or AnimInstance is missing."),
+				*GetNameSafe(this));
+		}
+	}
 }
 
 bool AZCCharBase::CanBeTargetLocked() const
 {
 	// 没有属性组件时保持兼容；有属性组件时死亡角色不能成为锁定目标。
-	return !Attributes || !Attributes->IsDead();
+	return (!Attributes || !Attributes->IsDead()) && !bDeathStarted;
 }
 
 FVector AZCCharBase::GetTargetLockLocation() const
@@ -279,8 +454,36 @@ void AZCCharBase::Look_Triggered(const FInputActionValue& val)
 	FVector2d LookVal = val.Get<FVector2d>();
 	if (Controller == nullptr)return;
 
+	// 锁定只增加相机自动对准，不屏蔽原有 Look 输入；玩家的输入仍先作用于
+	// Controller Rotation，随后由 Tick 以 RInterpTo 平滑收敛到目标方向。
 	AddControllerYawInput(LookVal.X);
 	AddControllerPitchInput(LookVal.Y);
+}
+
+void AZCCharBase::TargetLock_Started(const FInputActionValue& val)
+{
+	if (bDeathStarted || !TargetLock)
+	{
+		return;
+	}
+
+	if (TargetLock->HasTarget())
+	{
+		// Started 的第二次触发始终负责解除当前锁定。
+		TargetLock->ClearTarget();
+		return;
+	}
+
+	// Enhanced Input 本身只会在本地玩家上触发；这里再显式保护一次，避免
+	// 服务器或远程代理角色意外驱动本地相机状态。
+	if (!IsLocallyControlled() || !FollowCamera)
+	{
+		return;
+	}
+
+	TargetLock->AcquireBestTarget(
+		FollowCamera->GetComponentLocation(),
+		FollowCamera->GetForwardVector());
 }
 
 #pragma endregion 
@@ -388,11 +591,19 @@ void AZCCharBase::ToggleUI_Started(const FInputActionValue& val)
 
 void AZCCharBase::ActiveRune_Started(const FInputActionValue& val)
 {
-	ToggleRuneActivity();
+	if (!Combat || Combat->CanAcceptCombatInput())
+	{
+		ToggleRuneActivity();
+	}
 }
 
 void AZCCharBase::ReleaseRune_Started(const FInputActionValue& val)
 {
+	if (Combat && !Combat->CanAcceptCombatInput())
+	{
+		return;
+	}
+
 	//检查是否有可投掷的物品
 	if (InteractingActor != nullptr)
 	{
@@ -461,6 +672,12 @@ void AZCCharBase::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	if (bTargetLockRotationActive)
+	{
+		UpdateTargetLockOrientation(DeltaTime);
+		UpdateTargetLockCamera(DeltaTime);
+	}
+
 	//检测当前聚焦目标是否是潜在的可磁铁吸附目标，或更新拖拽位置
 	MagDragObjTick();
 
@@ -479,6 +696,11 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	EIComp->BindAction(MoveAction,ETriggerEvent::Completed,this,&AZCCharBase::Move_Completed);
 
 	EIComp->BindAction(LookAction,ETriggerEvent::Triggered,this,&AZCCharBase::Look_Triggered);
+
+	if (TargetLockAction)
+	{
+		EIComp->BindAction(TargetLockAction, ETriggerEvent::Started, this, &AZCCharBase::TargetLock_Started);
+	}
 	
 	EIComp->BindAction(SprintAction,ETriggerEvent::Triggered,this,&AZCCharBase::Sprint_Triggered);
 	EIComp->BindAction(SprintAction,ETriggerEvent::Completed,this,&AZCCharBase::Sprint_Completed);
@@ -760,6 +982,11 @@ void AZCCharBase::AutoDeactivateAllRunes()
 
 void AZCCharBase::ToggleRuneActivity()
 {
+	if (Combat && !Combat->CanAcceptCombatInput())
+	{
+		return;
+	}
+
 	//若在投掷状态激活技能则取消投掷
 	if (InteractingActor)
 	{
@@ -1405,6 +1632,158 @@ void AZCCharBase::ReadyToThrow(UStaticMeshComponent* SMRef)
 	SMRef->SetSimulatePhysics(true);
 	CrossHairAndCameraMode(false);
 	bReadyToThrow = false;
+}
+
+void AZCCharBase::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
+{
+	const IZCTargetable* Targetable = IsValid(CurrentTarget)
+		&& CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass())
+		? Cast<IZCTargetable>(CurrentTarget)
+		: nullptr;
+	const bool bHasValidTarget = Targetable && Targetable->CanBeTargetLocked();
+	SetTargetLockRotationMode(bHasValidTarget);
+}
+
+void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)
+{
+	if (bDeathStarted || !TargetLock || !TargetLock->HasTarget())
+	{
+		return;
+	}
+
+	AActor* CurrentTarget = TargetLock->GetCurrentTarget();
+	if (!IsValid(CurrentTarget) || !CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass()))
+	{
+		TargetLock->ClearTarget();
+		return;
+	}
+
+	const IZCTargetable* Targetable = Cast<IZCTargetable>(CurrentTarget);
+	if (!Targetable || !Targetable->CanBeTargetLocked())
+	{
+		// 目标死亡等状态变化应立即退出锁定朝向，不等待组件下一次 Tick 兜底。
+		TargetLock->ClearTarget();
+		return;
+	}
+
+	const FVector ToTarget = Targetable->GetTargetLockLocation() - GetActorLocation();
+	if (ToTarget.ContainsNaN())
+	{
+		return;
+	}
+
+	const FVector HorizontalDirection(ToTarget.X, ToTarget.Y, 0.0f);
+	if (HorizontalDirection.SizeSquared() <= FMath::Square(KINDA_SMALL_NUMBER))
+	{
+		return;
+	}
+
+	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
+	const float MaxYawStep = FMath::Max(TargetLockRotationSpeed, 0.0f) * SafeDeltaTime;
+	if (!FMath::IsFinite(MaxYawStep))
+	{
+		return;
+	}
+
+	const FRotator CurrentRotation = GetActorRotation();
+	if (!FMath::IsFinite(CurrentRotation.Yaw))
+	{
+		return;
+	}
+
+	const float TargetYaw = FMath::RadiansToDegrees(FMath::Atan2(HorizontalDirection.Y, HorizontalDirection.X));
+	if (!FMath::IsFinite(TargetYaw))
+	{
+		return;
+	}
+
+	FRotator NewRotation = CurrentRotation;
+	NewRotation.Yaw = FMath::FixedTurn(CurrentRotation.Yaw, FMath::UnwindDegrees(TargetYaw), MaxYawStep);
+	if (FMath::IsFinite(NewRotation.Yaw))
+	{
+		SetActorRotation(NewRotation);
+	}
+}
+
+void AZCCharBase::SetTargetLockRotationMode(const bool bEnableTargetLockRotation)
+{
+	bTargetLockRotationActive = bEnableTargetLockRotation;
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->bOrientRotationToMovement = !bEnableTargetLockRotation;
+	}
+}
+
+void AZCCharBase::UpdateTargetLockCamera(const float DeltaTime)
+{
+	if (!bTargetLockRotationActive || bDeathStarted || !TargetLock || !TargetLock->HasTarget()
+		|| !IsLocallyControlled() || !FollowCamera)
+	{
+		return;
+	}
+
+	APlayerController* PlayerController = Cast<APlayerController>(Controller);
+	if (!PlayerController)
+	{
+		return;
+	}
+
+	AActor* CurrentTarget = TargetLock->GetCurrentTarget();
+	if (!IsValid(CurrentTarget) || !CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass()))
+	{
+		TargetLock->ClearTarget();
+		return;
+	}
+
+	const IZCTargetable* Targetable = Cast<IZCTargetable>(CurrentTarget);
+	if (!Targetable || !Targetable->CanBeTargetLocked())
+	{
+		TargetLock->ClearTarget();
+		return;
+	}
+
+	const FVector CameraOrigin = CameraBoom
+		? CameraBoom->GetComponentLocation()
+		: FollowCamera->GetComponentLocation();
+	const FVector ToTarget = Targetable->GetTargetLockLocation() - CameraOrigin;
+	if (ToTarget.ContainsNaN() || ToTarget.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FRotator DesiredRotation = ToTarget.Rotation();
+	const FRotator CurrentRotation = PlayerController->GetControlRotation();
+	if (!FMath::IsFinite(DesiredRotation.Pitch) || !FMath::IsFinite(DesiredRotation.Yaw)
+		|| !FMath::IsFinite(CurrentRotation.Pitch) || !FMath::IsFinite(CurrentRotation.Yaw))
+	{
+		return;
+	}
+
+	const float MinPitch = FMath::Min(TargetLockCameraMinPitch, TargetLockCameraMaxPitch);
+	const float MaxPitch = FMath::Max(TargetLockCameraMinPitch, TargetLockCameraMaxPitch);
+	FRotator ClampedDesiredRotation = DesiredRotation;
+	ClampedDesiredRotation.Pitch = FMath::Clamp(FRotator::NormalizeAxis(DesiredRotation.Pitch), MinPitch, MaxPitch);
+	ClampedDesiredRotation.Roll = 0.0f;
+
+	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
+	const float SafeInterpSpeed = FMath::Max(TargetLockCameraInterpSpeed, 0.0f);
+	if (!FMath::IsFinite(SafeInterpSpeed))
+	{
+		return;
+	}
+
+	FRotator NewControlRotation = FMath::RInterpTo(
+		CurrentRotation,
+		ClampedDesiredRotation,
+		SafeDeltaTime,
+		SafeInterpSpeed);
+	NewControlRotation.Pitch = FMath::Clamp(FRotator::NormalizeAxis(NewControlRotation.Pitch), MinPitch, MaxPitch);
+	NewControlRotation.Roll = 0.0f;
+	if (FMath::IsFinite(NewControlRotation.Pitch) && FMath::IsFinite(NewControlRotation.Yaw))
+	{
+		// 保留 Look_Triggered 已经写入的当前旋转，仅将其向锁定目标平滑插值。
+		PlayerController->SetControlRotation(NewControlRotation);
+	}
 }
 #pragma endregion
 

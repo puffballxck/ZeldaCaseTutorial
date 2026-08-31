@@ -33,6 +33,7 @@ class UZCAttributeComponent;
 class UZCCombatComponent;
 class UZCTargetLockComponent;
 class UStaticMeshComponent;
+class UAnimMontage;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FZCStaminaChangedSignature,
@@ -96,6 +97,10 @@ public:
 
 	UPROPERTY(EditAnywhere,category="Inputs")
 	UInputAction* LookAction;
+
+	/** Enhanced Input 的目标锁定动作；Started 时在当前目标与屏幕中心候选之间切换。 */
+	UPROPERTY(EditAnywhere, category="Inputs")
+	UInputAction* TargetLockAction;
 
 	UPROPERTY(EditAnywhere,category="Inputs")
 	UInputAction* SprintAction;
@@ -253,6 +258,25 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	/** 非致死伤害播放的全身受击蒙太奇。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Player|Animation")
+	TObjectPtr<UAnimMontage> HitReactMontage;
+
+	/** 首次致死伤害播放并保持最终姿势的全身死亡蒙太奇。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Player|Animation")
+	TObjectPtr<UAnimMontage> DeathMontage;
+
+	void PlayHitReact();
+	void HandleHitReactMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	UFUNCTION()
+	void HandleDeath(AActor* DeadActor);
+
+	bool bHitReactActive = false;
+	bool bDeathStarted = false;
+	bool bHitReactDiagnosticIssued = false;
+	bool bDeathDiagnosticIssued = false;
+
 	virtual void Landed(const FHitResult& Hit) override;
 
 #pragma region Inputs Node
@@ -264,6 +288,10 @@ protected:
 
 	UFUNCTION()
 	void Look_Triggered(const FInputActionValue& val);
+
+	/** Enhanced Input 的目标锁定 Started 回调。 */
+	UFUNCTION()
+	void TargetLock_Started(const FInputActionValue& val);
 
 	UFUNCTION()
 	void Sprint_Triggered(const FInputActionValue& val);
@@ -314,6 +342,24 @@ public:
 	virtual bool CanBeTargetLocked() const override;
 	/** 返回目标锁定使用的角色世界位置。 */
 	virtual FVector GetTargetLockLocation() const override;
+
+	/** 目标锁定时角色每秒最多旋转的 Yaw 角度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float TargetLockRotationSpeed = 720.0f;
+
+	/** 锁定期间相机朝向目标的平滑插值速度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float TargetLockCameraInterpSpeed = 6.0f;
+
+	/** 锁定相机允许的最小/最大 Pitch。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock")
+	float TargetLockCameraMinPitch = -45.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock")
+	float TargetLockCameraMaxPitch = 45.0f;
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
+	bool IsDeathStarted() const { return bDeathStarted; }
 	
 #pragma region Locomotion
 	UFUNCTION()
@@ -458,6 +504,21 @@ public:
 	void BroadcastStaminaChanged();
 
 	void ReadyToThrow(UStaticMeshComponent* SMRef);
+
+	/** 目标锁定组件变更目标时切换角色朝向模式。 */
+	UFUNCTION()
+	void HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
+
+	/** 在角色 Tick 中按锁定目标更新水平朝向。 */
+	void UpdateTargetLockOrientation(float DeltaTime);
+
+	/** 仅在本地控制时把相机平滑插值到锁定目标，并保留 Look 输入。 */
+	void UpdateTargetLockCamera(float DeltaTime);
+
+	/** 设置移动组件的旋转模式；TargetLockComponent 不负责角色旋转。 */
+	void SetTargetLockRotationMode(bool bEnableTargetLockRotation);
+
+	bool bTargetLockRotationActive = false;
 };
 
 

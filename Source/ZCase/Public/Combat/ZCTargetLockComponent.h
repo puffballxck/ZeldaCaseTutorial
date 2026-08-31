@@ -24,6 +24,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
 	bool SetTarget(AActor* Candidate);
 
+	/**
+	 * 从视野中心获取最合适的可锁定目标，并替换当前目标。
+	 *
+	 * 候选对象必须实现 IZCTargetable、当前允许锁定，并且位于获取半径和
+	 * 屏幕中心角度内且没有被 ECC_Visibility 几何体遮挡。评分以视线角度
+	 * 为主、距离为辅；找不到候选时保持当前目标不变，由生命周期校验负责
+	 * 清除死亡、超距或持续遮挡的目标。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
+	bool AcquireBestTarget(const FVector& ViewLocation, const FVector& ViewForward);
+
 	/** 清除当前目标并关闭仅用于有效锁定目标的 Tick。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
 	void ClearTarget();
@@ -40,6 +51,30 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ZCase|Target Lock")
 	FZCTargetChangedSignature OnTargetChanged;
 
+	/** 获取目标的最大距离（厘米）。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float AcquisitionRadius = 2500.0f;
+
+	/** 获取目标允许偏离屏幕中心的半角（角度）。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float AcquisitionHalfAngle = 50.0f;
+
+	/** 当前目标超过该距离（厘米）时解除锁定。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float LockLostDistance = 3000.0f;
+
+	/** 目标被遮挡后允许持续的宽限时间（秒）。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float OcclusionGracePeriod = 0.75f;
+
+	/** 获取评分中角度项的权重。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float AngleWeight = 0.8f;
+
+	/** 获取评分中距离项的权重。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float DistanceWeight = 0.2f;
+
 protected:
 	virtual void TickComponent(
 		float DeltaTime,
@@ -47,11 +82,17 @@ protected:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FZCTargetLockLossConditionsTest;
+#endif
+
 	UFUNCTION()
 	void HandleTargetDestroyed(AActor* DestroyedActor);
 
 	bool IsValidTarget(const AActor* Candidate) const;
+	bool IsTargetVisible(const AActor* Candidate, const FVector& ViewLocation) const;
 	void ReplaceTarget(AActor* NewTarget);
 
 	TWeakObjectPtr<AActor> CurrentTarget;
+	float OccludedDuration = 0.0f;
 };
