@@ -18,7 +18,9 @@ public class ZCaseEditor : ModuleRules
 			"Slate",
 			"SlateCore",
 			"ToolMenus",
-			"UnrealEd"
+			"UnrealEd",
+			"ZCase", "AIModule", "NavigationSystem", "BehaviorTreeEditor", "AIGraph",
+			"AnimGraph", "AnimGraphRuntime", "BlueprintGraph", "BlueprintEditorLibrary", "AnimationBlueprintLibrary"
 		});
 	}
 }
