@@ -8,6 +8,9 @@
 
 class AZCCharBase;
 class UZCLayout;
+class UZCTargetLockComponent;
+class UZCTargetLockIndicatorWidget;
+class UZCHeartHealthWidget;
 
 /**
  * Owns the local player's presentation state and root HUD lifecycle.
@@ -50,10 +53,27 @@ private:
 	void HandleDeferredPresentationInitialization();
 	void ApplyRuneMenuPolicy();
 	void ReleasePlayerPresentation(AZCCharBase* PreviousPlayer);
+	void InitializeTargetLockPresentation(AZCCharBase* PlayerCharacter);
+	void ReleaseTargetLockPresentation(AZCCharBase* PreviousPlayer);
+
+	UFUNCTION()
+	void HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
 
 	/** Preferred root layout class. Legacy BP_Player configuration is a fallback. */
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation")
 	TSubclassOf<UZCLayout> RootLayoutClass;
+
+	/** One controller-owned indicator reused for every target switch. */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation")
+	TSubclassOf<UZCTargetLockIndicatorWidget> TargetLockIndicatorClass;
+
+	/** 可选蓝图子类，用于调整心形尺寸和受伤动画；未配置时使用原生默认值。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Health")
+	TSubclassOf<UZCHeartHealthWidget> HeartHealthWidgetClass;
+
+	/** DPI 缩放前的左上角边距。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Health")
+	FVector2D HeartHealthMargin = FVector2D(40.0f, 40.0f);
 
 	/** The one root widget associated with the currently possessed local player. */
 	UPROPERTY(Transient)
@@ -62,6 +82,17 @@ private:
 	/** Character whose legacy LayoutRef currently backs RootLayout. */
 	UPROPERTY(Transient)
 	TObjectPtr<AZCCharBase> PresentedPlayer;
+
+	/** The single indicator instance shown for the locally possessed player. */
+	UPROPERTY(Transient)
+	TObjectPtr<UZCTargetLockIndicatorWidget> TargetLockIndicator;
+
+	/** 始终位于菜单之上的三心生命值 HUD。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UZCHeartHealthWidget> HeartHealthWidget;
+
+	TWeakObjectPtr<AZCCharBase> BoundTargetLockPlayer;
+	TWeakObjectPtr<UZCTargetLockComponent> BoundTargetLock;
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "ZCase|Player Presentation", meta = (AllowPrivateAccess = "true"))
 	bool bRuneMenuOpen = false;

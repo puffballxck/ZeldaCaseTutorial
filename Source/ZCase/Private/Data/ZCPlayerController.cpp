@@ -4,9 +4,12 @@
 #include "Data/ZCPlayerController.h"
 
 #include "Characters/ZCCharBase.h"
+#include "Combat/ZCTargetLockComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 #include "UI/ZCLayout.h"
+#include "UI/ZCTargetLockIndicatorWidget.h"
+#include "UI/ZCHeartHealthWidget.h"
 
 void AZCPlayerController::BeginPlay()
 {
@@ -27,12 +30,25 @@ void AZCPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(PresentationInitializationTimer);
 	bPresentationInitializationPending = false;
 	ReleasePlayerPresentation(PresentedPlayer);
+	if (IsValid(TargetLockIndicator))
+	{
+		TargetLockIndicator->RemoveFromParent();
+	}
+	TargetLockIndicator = nullptr;
 
 	Super::EndPlay(EndPlayReason);
 }
 
 void AZCPlayerController::OnPossess(APawn* InPawn)
 {
+	// A pawn can be replaced without being destroyed. Clear its gameplay lock
+	// before the controller starts presenting the newly possessed pawn.
+	if (AZCCharBase* PreviousPlayer = Cast<AZCCharBase>(GetPawn());
+		IsValid(PreviousPlayer) && PreviousPlayer != InPawn && PreviousPlayer->TargetLock)
+	{
+		PreviousPlayer->TargetLock->ClearTarget();
+	}
+
 	Super::OnPossess(InPawn);
 
 	if (IsLocalController())
@@ -46,7 +62,15 @@ void AZCPlayerController::OnUnPossess()
 	GetWorldTimerManager().ClearTimer(PresentationInitializationTimer);
 	bPresentationInitializationPending = false;
 
-	AZCCharBase* PreviousPlayer = Cast<AZCCharBase>(GetPawn());
+	AZCCharBase* PreviousPlayer = PresentedPlayer;
+	if (!IsValid(PreviousPlayer))
+	{
+		PreviousPlayer = BoundTargetLockPlayer.Get();
+	}
+	if (!IsValid(PreviousPlayer))
+	{
+		PreviousPlayer = Cast<AZCCharBase>(GetPawn());
+	}
 	ReleasePlayerPresentation(PreviousPlayer);
 
 	Super::OnUnPossess();
@@ -77,8 +101,32 @@ void AZCPlayerController::InitializePlayerPresentation()
 	{
 		ReleasePlayerPresentation(PresentedPlayer);
 	}
+	else if (BoundTargetLockPlayer.IsValid() && BoundTargetLockPlayer.Get() != PlayerCharacter)
+	{
+		ReleasePlayerPresentation(BoundTargetLockPlayer.Get());
+	}
 
 	PresentedPlayer = PlayerCharacter;
+	InitializeTargetLockPresentation(PlayerCharacter);
+	if (!IsValid(HeartHealthWidget))
+	{
+		const TSubclassOf<UZCHeartHealthWidget> WidgetClass = HeartHealthWidgetClass
+			? HeartHealthWidgetClass.Get() : UZCHeartHealthWidget::StaticClass();
+		HeartHealthWidget = CreateWidget<UZCHeartHealthWidget>(this, WidgetClass);
+	}
+	if (IsValid(HeartHealthWidget))
+	{
+		HeartHealthWidget->SetAttributes(PlayerCharacter->Attributes);
+		if (!HeartHealthWidget->IsInViewport())
+		{
+			HeartHealthWidget->SetVisibility(ESlateVisibility::Hidden);
+			HeartHealthWidget->AddToPlayerScreen(20);
+			HeartHealthWidget->SetAlignmentInViewport(FVector2D::ZeroVector);
+			HeartHealthWidget->SetDesiredSizeInViewport(HeartHealthWidget->GetHeartBarSize());
+			HeartHealthWidget->SetPositionInViewport(HeartHealthMargin, false);
+			HeartHealthWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+	}
 
 	// Adopt a legacy layout only when no controller-owned class is configured.
 	// This keeps old BP_Player assets working while allowing RootLayoutClass to
@@ -211,6 +259,14 @@ void AZCPlayerController::ApplyRuneMenuPolicy()
 
 void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
 {
+	ReleaseTargetLockPresentation(PreviousPlayer);
+	if (IsValid(HeartHealthWidget))
+	{
+		HeartHealthWidget->SetAttributes(nullptr);
+		HeartHealthWidget->RemoveFromParent();
+	}
+	HeartHealthWidget = nullptr;
+
 	if (bRuneMenuOpen || bPausedByRuneMenu)
 	{
 		bRuneMenuOpen = false;
@@ -229,4 +285,90 @@ void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
 
 	RootLayout = nullptr;
 	PresentedPlayer = nullptr;
+}
+
+void AZCPlayerController::InitializeTargetLockPresentation(AZCCharBase* PlayerCharacter)
+{
+	if (!IsLocalController() || !IsValid(PlayerCharacter))
+	{
+		return;
+	}
+
+	if (!IsValid(TargetLockIndicator) && TargetLockIndicatorClass)
+	{
+		TargetLockIndicator = CreateWidget<UZCTargetLockIndicatorWidget>(this, TargetLockIndicatorClass);
+		if (IsValid(TargetLockIndicator))
+		{
+			// Keep the indicator above the controller-owned root layout and its
+			// rune menu while remaining a single reusable widget instance.
+			TargetLockIndicator->AddToPlayerScreen(100);
+		}
+	}
+
+	UZCTargetLockComponent* NewTargetLock = PlayerCharacter->TargetLock;
+	if (BoundTargetLock.Get() != NewTargetLock)
+	{
+		if (BoundTargetLock.IsValid())
+		{
+			BoundTargetLock->OnTargetChanged.RemoveDynamic(this, &AZCPlayerController::HandleTargetChanged);
+		}
+
+		BoundTargetLock = NewTargetLock;
+		BoundTargetLockPlayer = PlayerCharacter;
+		if (BoundTargetLock.IsValid())
+		{
+			BoundTargetLock->OnTargetChanged.AddUniqueDynamic(this, &AZCPlayerController::HandleTargetChanged);
+		}
+	}
+
+	// Synchronize an already-active target in case possession/presentation
+	// initialization happened after the pawn's first target change event.
+	HandleTargetChanged(nullptr, BoundTargetLock.IsValid() ? BoundTargetLock->GetCurrentTarget() : nullptr);
+}
+
+void AZCPlayerController::ReleaseTargetLockPresentation(AZCCharBase* PreviousPlayer)
+{
+	if (!IsValid(PreviousPlayer))
+	{
+		PreviousPlayer = BoundTargetLockPlayer.Get();
+	}
+
+	if (BoundTargetLock.IsValid())
+	{
+		BoundTargetLock->OnTargetChanged.RemoveDynamic(this, &AZCPlayerController::HandleTargetChanged);
+	}
+
+	UZCTargetLockComponent* PreviousTargetLock = IsValid(PreviousPlayer) ? PreviousPlayer->TargetLock : nullptr;
+	if (PreviousTargetLock)
+	{
+		PreviousTargetLock->ClearTarget();
+	}
+	if (BoundTargetLock.IsValid() && BoundTargetLock.Get() != PreviousTargetLock)
+	{
+		BoundTargetLock->ClearTarget();
+	}
+
+	BoundTargetLock = nullptr;
+	BoundTargetLockPlayer = nullptr;
+	if (IsValid(TargetLockIndicator))
+	{
+		TargetLockIndicator->ClearTarget();
+	}
+}
+
+void AZCPlayerController::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
+{
+	if (!IsValid(TargetLockIndicator))
+	{
+		return;
+	}
+
+	if (IsValid(CurrentTarget))
+	{
+		TargetLockIndicator->SetTarget(CurrentTarget);
+	}
+	else
+	{
+		TargetLockIndicator->ClearTarget();
+	}
 }
