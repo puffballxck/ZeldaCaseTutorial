@@ -9,6 +9,7 @@
 
 class UAnimMontage;
 class UZCAttributeComponent;
+class UZCCombatComponent;
 
 /** 负责敌人受伤、受击表现和单向死亡生命周期的轻量角色基类。 */
 UCLASS()
@@ -23,6 +24,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZCase|Enemy|Attributes")
 	TObjectPtr<UZCAttributeComponent> Attributes;
 
+	/** 敌人共享的攻击生命周期、命中窗口和受击/死亡打断状态。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZCase|Enemy|Combat")
+	TObjectPtr<UZCCombatComponent> Combat;
+
 	/** 统一接收引擎伤害，并根据伤害结果分流到受击或死亡表现。 */
 	virtual float TakeDamage(
 		float DamageAmount,
@@ -33,10 +38,16 @@ public:
 	/** 存活敌人才允许成为锁定目标。 */
 	virtual bool CanBeTargetLocked() const override;
 
-	/** 第一版以胶囊体上半身作为锁定位置。 */
+	/** 返回敌人头部 Socket 的锁定锚点；缺少 Socket 时回退到胶囊体上半身。 */
 	virtual FVector GetTargetLockLocation() const override;
 
 protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/** 为派生敌人接入其攻击来源；基类只提供通用 Combat，不假设武器或骨骼端点。 */
+	virtual void ConfigureCombat();
+
 	/** 非致命伤害播放的全身受击蒙太奇。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Enemy|Animation")
 	TObjectPtr<UAnimMontage> HitReactMontage;
@@ -47,10 +58,21 @@ protected:
 
 private:
 	void PlayHitReact();
-	void HandleDeath();
+
+	UFUNCTION()
+	void HandleHitReactMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	UFUNCTION()
+	void HandleDeath(AActor* DeadActor);
 
 	/** 防止任何调用路径重复执行死亡表现和碰撞切换。 */
 	bool bDeathStarted = false;
+
+	/** 防止同步伤害回调在同一 TakeDamage 调用内递归扣血。 */
+	bool bDamageProcessing = false;
+
+	/** 连续受击重置同一个蒙太奇，而不是并行叠加多个受击状态。 */
+	bool bHitReactActive = false;
 
 	/** 缺少动画配置时每类诊断最多输出一次，避免连续受击刷屏。 */
 	bool bHitReactDiagnosticIssued = false;

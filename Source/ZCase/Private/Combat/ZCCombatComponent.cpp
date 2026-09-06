@@ -5,6 +5,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Combat/ZCAttributeComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
@@ -50,10 +51,57 @@ void UZCCombatComponent::InitializeEquipment(
 	SwordMesh = InSwordMesh;
 	SheathMesh = InSheathMesh;
 	ShieldMesh = InShieldMesh;
+	TraceSourceMesh = InSwordMesh;
 	WeaponState = EZCWeaponState::Sheathed;
 	AnimationAttachmentState = EZCWeaponAttachmentState::Sheathed;
 	// 初始时所有装备都放在背部挂点，后续由状态机和动画时序切换。
 	SetEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
+}
+
+void UZCCombatComponent::InitializeAttackSource(
+	USkeletalMeshComponent* InCharacterMesh,
+	UMeshComponent* InTraceMesh,
+	const FName InTraceBasePoint,
+	const FName InTraceTipPoint)
+{
+	// 重新绑定攻击来源时关闭旧窗口，但不改变死亡后的 Disabled 状态。
+	EndTrace();
+	bAttackActive = false;
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
+	CharacterMesh = InCharacterMesh;
+	TraceSourceMesh = InTraceMesh;
+	// NAME_None means keep the component's editable defaults. This lets the
+	// generic enemy base provide only a mesh while a concrete enemy can opt in
+	// to bone endpoints explicitly.
+	if (!InTraceBasePoint.IsNone())
+	{
+		TraceBaseSocket = InTraceBasePoint;
+	}
+	if (!InTraceTipPoint.IsNone())
+	{
+		TraceTipSocket = InTraceTipPoint;
+	}
+}
+
+void UZCCombatComponent::SetAttackMontage(UAnimMontage* InAttackMontage)
+{
+	AttackMontage = InAttackMontage;
+}
+
+void UZCCombatComponent::SetTraceDamage(const float InTraceDamage)
+{
+	TraceDamage = FMath::IsFinite(InTraceDamage) ? FMath::Max(InTraceDamage, 0.0f) : 0.0f;
+}
+
+void UZCCombatComponent::SetTraceRadius(const float InTraceRadius)
+{
+	TraceRadius = FMath::IsFinite(InTraceRadius) ? FMath::Max(InTraceRadius, 0.0f) : 0.0f;
+}
+
+void UZCCombatComponent::SetPlayerOnlyDamage(const bool bInPlayerOnlyDamage)
+{
+	bPlayerOnlyDamage = bInPlayerOnlyDamage;
 }
 
 EZCWeaponCommand UZCCombatComponent::ResolveAttackCommand(const EZCWeaponState State)
@@ -90,6 +138,50 @@ bool UZCCombatComponent::HandleAttackInput()
 	}
 }
 
+bool UZCCombatComponent::TryAttack()
+{
+	// AI 入口不要求武器状态为 Equipped，但仍共享同一战斗可用性和攻击生命周期。
+	if (!CanAcceptCombatInput() || bAttackActive || WeaponState == EZCWeaponState::Attacking
+		|| !CharacterMesh || !AttackMontage)
+	{
+		return false;
+	}
+
+	return StartWeaponAttack();
+}
+
+void UZCCombatComponent::CancelAttack()
+{
+	// 先关闭状态和 Trace，再停止 Montage；Montage 的旧结束回调会因状态已改变而失效。
+	const bool bHadActiveAttack = FinishAttack();
+	if (WeaponState == EZCWeaponState::Attacking)
+	{
+		WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
+			? EZCWeaponState::Equipped
+			: EZCWeaponState::Sheathed;
+	}
+
+	if (bHadActiveAttack && CharacterMesh)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			if (AttackMontage && AnimInstance->Montage_IsPlaying(AttackMontage))
+			{
+				// Remove the old delegate before starting blend-out. Otherwise a
+				// subsequent attack using the same montage could receive the old
+				// instance's end callback and finish the new lifecycle.
+				ClearAttackMontageEndDelegate(AnimInstance);
+				AnimInstance->Montage_Stop(0.05f, AttackMontage);
+			}
+		}
+	}
+
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
+	}
+}
+
 bool UZCCombatComponent::StartDraw()
 {
 	if (!CanAcceptCombatInput())
@@ -116,7 +208,7 @@ bool UZCCombatComponent::StartDraw()
 
 bool UZCCombatComponent::StartWeaponAttack()
 {
-	if (!CanAcceptCombatInput())
+	if (!CanAcceptCombatInput() || bAttackActive || WeaponState == EZCWeaponState::Attacking)
 	{
 		return false;
 	}
@@ -131,15 +223,19 @@ bool UZCCombatComponent::StartWeaponAttack()
 		return true;
 	}
 
-	FinishAttack();
+	const bool bHadActiveAttack = FinishAttack();
 	WeaponState = EZCWeaponState::Equipped;
 	ScheduleAutoSheath();
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
+	}
 	return false;
 }
 
 bool UZCCombatComponent::RequestSheath()
 {
-	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped)
+	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped || !SwordMesh)
 	{
 		return false;
 	}
@@ -212,9 +308,13 @@ void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const b
 	}
 
 	// 无论攻击蒙太奇正常结束还是被打断，都必须关闭残留命中窗口。
-	FinishAttack();
+	const bool bHadActiveAttack = FinishAttack();
 	WeaponState = EZCWeaponState::Equipped;
 	ScheduleAutoSheath();
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(bInterrupted);
+	}
 }
 
 void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
@@ -387,7 +487,8 @@ bool UZCCombatComponent::IsWeaponEquippedForAnimation() const
 
 void UZCCombatComponent::ScheduleAutoSheath()
 {
-	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped || AutoSheathDelay <= 0.0f || !GetWorld())
+	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped || !SwordMesh
+		|| AutoSheathDelay <= 0.0f || !GetWorld())
 	{
 		return;
 	}
@@ -417,11 +518,13 @@ void UZCCombatComponent::HandleAutoSheathElapsed()
 	}
 }
 
-void UZCCombatComponent::FinishAttack()
+bool UZCCombatComponent::FinishAttack()
 {
 	// 结束攻击时同时关闭生命周期、命中窗口和 Tick；命中集合在下一次攻击开始时清空。
+	const bool bHadActiveAttack = bAttackActive;
 	EndTrace();
 	bAttackActive = false;
+	return bHadActiveAttack;
 }
 
 void UZCCombatComponent::StartAttack()
@@ -488,17 +591,21 @@ bool UZCCombatComponent::InterruptForHitReaction()
 	CombatAvailability = EZCCombatAvailability::Reacting;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
-	FinishAttack();
+	const bool bHadActiveAttack = FinishAttack();
 	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
 		? EZCWeaponState::Equipped
 		: EZCWeaponState::Sheathed;
-
 	if (CharacterMesh)
 	{
 		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
 		{
+			ClearAttackMontageEndDelegate(AnimInstance);
 			AnimInstance->Montage_Stop(0.05f);
 		}
+	}
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
 	}
 	return true;
 }
@@ -528,17 +635,30 @@ void UZCCombatComponent::DisableCombat()
 	CombatAvailability = EZCCombatAvailability::Disabled;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
-	FinishAttack();
+	const bool bHadActiveAttack = FinishAttack();
 	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
 		? EZCWeaponState::Equipped
 		: EZCWeaponState::Sheathed;
-
 	if (CharacterMesh)
 	{
 		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
 		{
+			ClearAttackMontageEndDelegate(AnimInstance);
 			AnimInstance->Montage_Stop(0.05f);
 		}
+	}
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
+	}
+}
+
+void UZCCombatComponent::ClearAttackMontageEndDelegate(UAnimInstance* AnimInstance)
+{
+	if (AnimInstance && AttackMontage && AnimInstance->Montage_IsPlaying(AttackMontage))
+	{
+		FOnMontageEnded EmptyEndDelegate;
+		AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, AttackMontage);
 	}
 }
 
@@ -552,37 +672,46 @@ void UZCCombatComponent::DisableTraceTick()
 
 bool UZCCombatComponent::GetTraceSocketLocations(FVector& OutBase, FVector& OutTip)
 {
-	if (!SwordMesh)
+	if (!TraceSourceMesh)
 	{
 		if (!bTraceConfigurationWarningLogged)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("ZCCombatComponent: Weapon trace skipped because SwordMesh is missing on %s."), *GetNameSafe(GetOwner()));
+			UE_LOG(LogTemp, Warning, TEXT("ZCCombatComponent: Attack trace skipped because the trace source is missing on %s."), *GetNameSafe(GetOwner()));
 			bTraceConfigurationWarningLogged = true;
 		}
 		return false;
 	}
 
-	if (TraceBaseSocket.IsNone() || TraceTipSocket.IsNone()
-		|| !SwordMesh->DoesSocketExist(TraceBaseSocket)
-		|| !SwordMesh->DoesSocketExist(TraceTipSocket))
+	const USkeletalMeshComponent* SkeletalTraceSource = Cast<USkeletalMeshComponent>(TraceSourceMesh.Get());
+	const bool bBaseExists = !TraceBaseSocket.IsNone()
+		&& (TraceSourceMesh->DoesSocketExist(TraceBaseSocket)
+			|| (SkeletalTraceSource && SkeletalTraceSource->GetBoneIndex(TraceBaseSocket) != INDEX_NONE));
+	const bool bTipExists = !TraceTipSocket.IsNone()
+		&& (TraceSourceMesh->DoesSocketExist(TraceTipSocket)
+			|| (SkeletalTraceSource && SkeletalTraceSource->GetBoneIndex(TraceTipSocket) != INDEX_NONE));
+	if (!bBaseExists || !bTipExists)
 	{
 		if (!bTraceConfigurationWarningLogged)
 		{
 			UE_LOG(
 				LogTemp,
 				Warning,
-				TEXT("ZCCombatComponent: Weapon trace skipped on %s because sockets '%s'/'%s' are missing from %s."),
+				TEXT("ZCCombatComponent: Attack trace skipped on %s because points '%s'/'%s' are missing from %s."),
 				*GetNameSafe(GetOwner()),
 				*TraceBaseSocket.ToString(),
 				*TraceTipSocket.ToString(),
-				*GetNameSafe(SwordMesh));
+				*GetNameSafe(TraceSourceMesh));
 			bTraceConfigurationWarningLogged = true;
 		}
 		return false;
 	}
 
-	OutBase = SwordMesh->GetSocketLocation(TraceBaseSocket);
-	OutTip = SwordMesh->GetSocketLocation(TraceTipSocket);
+	OutBase = SkeletalTraceSource && !TraceSourceMesh->DoesSocketExist(TraceBaseSocket)
+		? SkeletalTraceSource->GetBoneLocation(TraceBaseSocket, EBoneSpaces::WorldSpace)
+		: TraceSourceMesh->GetSocketLocation(TraceBaseSocket);
+	OutTip = SkeletalTraceSource && !TraceSourceMesh->DoesSocketExist(TraceTipSocket)
+		? SkeletalTraceSource->GetBoneLocation(TraceTipSocket, EBoneSpaces::WorldSpace)
+		: TraceSourceMesh->GetSocketLocation(TraceTipSocket);
 	return true;
 }
 
@@ -653,9 +782,9 @@ void UZCCombatComponent::TickComponent(
 	}
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ZCWeaponTrace), false, GetOwner());
-	if (SwordMesh)
+	if (TraceSourceMesh)
 	{
-		QueryParams.AddIgnoredComponent(SwordMesh.Get());
+		QueryParams.AddIgnoredComponent(TraceSourceMesh.Get());
 	}
 	const FCollisionShape SweepShape = FCollisionShape::MakeSphere(TraceRadius);
 
@@ -704,6 +833,15 @@ FZCCombatHitResult UZCCombatComponent::TryApplyHit(const FHitResult& Hit, const 
 	if (Owner && Target == Owner)
 	{
 		return Result;
+	}
+
+	if (bPlayerOnlyDamage)
+	{
+		const APawn* TargetPawn = Cast<APawn>(Target);
+		if (!TargetPawn || !TargetPawn->IsPlayerControlled())
+		{
+			return Result;
+		}
 	}
 
 	const TWeakObjectPtr<AActor> TargetKey(Target);

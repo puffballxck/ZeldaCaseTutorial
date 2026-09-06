@@ -98,9 +98,13 @@ public:
 	UPROPERTY(EditAnywhere,category="Inputs")
 	UInputAction* LookAction;
 
-	/** Enhanced Input 的目标锁定动作；Started 时在当前目标与屏幕中心候选之间切换。 */
+	/** Enhanced Input 的目标锁定动作；Started 时按距离循环可见候选。 */
 	UPROPERTY(EditAnywhere, category="Inputs")
 	UInputAction* TargetLockAction;
+
+	/** Enhanced Input 的独立目标解除动作。 */
+	UPROPERTY(EditAnywhere, category="Inputs")
+	UInputAction* TargetUnlockAction;
 
 	UPROPERTY(EditAnywhere,category="Inputs")
 	UInputAction* SprintAction;
@@ -274,6 +278,8 @@ protected:
 
 	bool bHitReactActive = false;
 	bool bDeathStarted = false;
+	/** 防止同步伤害或生命值回调递归扣除多颗半心。 */
+	bool bDamageProcessing = false;
 	bool bHitReactDiagnosticIssued = false;
 	bool bDeathDiagnosticIssued = false;
 
@@ -292,6 +298,10 @@ protected:
 	/** Enhanced Input 的目标锁定 Started 回调。 */
 	UFUNCTION()
 	void TargetLock_Started(const FInputActionValue& val);
+
+	/** Enhanced Input 的独立目标解除 Started 回调。 */
+	UFUNCTION()
+	void TargetUnlock_Started(const FInputActionValue& val);
 
 	UFUNCTION()
 	void Sprint_Triggered(const FInputActionValue& val);
@@ -346,17 +356,6 @@ public:
 	/** 目标锁定时角色每秒最多旋转的 Yaw 角度。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float TargetLockRotationSpeed = 720.0f;
-
-	/** 锁定期间相机朝向目标的平滑插值速度。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
-	float TargetLockCameraInterpSpeed = 6.0f;
-
-	/** 锁定相机允许的最小/最大 Pitch。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock")
-	float TargetLockCameraMinPitch = -45.0f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock")
-	float TargetLockCameraMaxPitch = 45.0f;
 
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
 	bool IsDeathStarted() const { return bDeathStarted; }
@@ -511,9 +510,6 @@ public:
 
 	/** 在角色 Tick 中按锁定目标更新水平朝向。 */
 	void UpdateTargetLockOrientation(float DeltaTime);
-
-	/** 仅在本地控制时把相机平滑插值到锁定目标，并保留 Look 输入。 */
-	void UpdateTargetLockCamera(float DeltaTime);
 
 	/** 设置移动组件的旋转模式；TargetLockComponent 不负责角色旋转。 */
 	void SetTargetLockRotationMode(bool bEnableTargetLockRotation);

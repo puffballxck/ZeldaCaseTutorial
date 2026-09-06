@@ -11,6 +11,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	AActor*, PreviousTarget,
 	AActor*, CurrentTarget);
 
+class APlayerController;
+
 /** 持有当前锁定目标，并保证目标在整个锁定生命周期内仍可被锁定。 */
 UCLASS(ClassGroup = (ZCase), meta = (BlueprintSpawnableComponent))
 class ZCASE_API UZCTargetLockComponent : public UActorComponent
@@ -23,6 +25,10 @@ public:
 	/** 校验候选对象并替换当前目标；同一目标重复设置视为成功但不会重复广播。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
 	bool SetTarget(AActor* Candidate);
+
+	/** 重新收集可见候选，按距离循环切换当前目标。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
+	bool CycleTarget();
 
 	/**
 	 * 从视野中心获取最合适的可锁定目标，并替换当前目标。
@@ -59,6 +65,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0", ClampMax = "180.0"))
 	float AcquisitionHalfAngle = 50.0f;
 
+	/** 本地玩家屏幕边缘的安全边距比例，用于循环候选和持续离屏检查。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0", ClampMax = "0.25"))
+	float ScreenSafeMargin = 0.05f;
+
 	/** 当前目标超过该距离（厘米）时解除锁定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float LockLostDistance = 3000.0f;
@@ -91,6 +101,11 @@ private:
 
 	bool IsValidTarget(const AActor* Candidate) const;
 	bool IsTargetVisible(const AActor* Candidate, const FVector& ViewLocation) const;
+	bool IsTargetInScreenSafeArea(
+		const AActor* Candidate,
+		const APlayerController* PlayerController,
+		const FVector& ViewLocation,
+		const FRotator& ViewRotation) const;
 	void ReplaceTarget(AActor* NewTarget);
 
 	TWeakObjectPtr<AActor> CurrentTarget;

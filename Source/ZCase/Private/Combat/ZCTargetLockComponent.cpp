@@ -44,6 +44,110 @@ bool UZCTargetLockComponent::SetTarget(AActor* Candidate)
 	return true;
 }
 
+bool UZCTargetLockComponent::CycleTarget()
+{
+	UWorld* World = GetWorld();
+	AActor* Owner = GetOwner();
+	APawn* OwnerPawn = Cast<APawn>(Owner);
+	APlayerController* PlayerController = OwnerPawn
+		? Cast<APlayerController>(OwnerPawn->GetController())
+		: nullptr;
+	if (!World || !IsValid(Owner) || !OwnerPawn || !OwnerPawn->IsLocallyControlled() || !PlayerController)
+	{
+		return false;
+	}
+
+	FVector ViewLocation;
+	FRotator ViewRotation;
+	PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
+	if (!IsFiniteVector(ViewLocation) || !IsFiniteVector(ViewRotation.Vector()))
+	{
+		return false;
+	}
+
+	const FVector OwnerLocation = Owner->GetActorLocation();
+	if (!IsFiniteVector(OwnerLocation))
+	{
+		return false;
+	}
+
+	const float SafeAcquisitionRadius = FMath::Max(AcquisitionRadius, 0.0f);
+	const float RadiusSquared = FMath::Square(SafeAcquisitionRadius);
+	struct FCycleCandidate
+	{
+		AActor* Target = nullptr;
+		float DistanceSquared = 0.0f;
+		uint32 UniqueID = 0;
+	};
+
+	TArray<FCycleCandidate> Candidates;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Candidate = *It;
+		if (Candidate == Owner || !IsValidTarget(Candidate))
+		{
+			continue;
+		}
+
+		const IZCTargetable* Targetable = Cast<IZCTargetable>(Candidate);
+		const FVector TargetLocation = Targetable
+			? Targetable->GetTargetLockLocation()
+			: FVector::ZeroVector;
+		if (!Targetable || !IsFiniteVector(TargetLocation))
+		{
+			continue;
+		}
+
+		const float DistanceSquared = FVector::DistSquared(OwnerLocation, TargetLocation);
+		if (!FMath::IsFinite(DistanceSquared) || DistanceSquared > RadiusSquared)
+		{
+			continue;
+		}
+
+		// 中键循环只使用实际玩家视点的可见且处于安全区内的目标，
+		// 但不再施加镜头前方角度限制，因此角色背后的目标也可参与循环。
+		if (!IsTargetVisible(Candidate, ViewLocation)
+			|| !IsTargetInScreenSafeArea(Candidate, PlayerController, ViewLocation, ViewRotation))
+		{
+			continue;
+		}
+
+		Candidates.Add({ Candidate, DistanceSquared, Candidate->GetUniqueID() });
+	}
+
+	if (Candidates.Num() == 0)
+	{
+		// 没有候选时保持当前状态，按键本身不产生任何锁定变化。
+		return false;
+	}
+
+	Candidates.Sort([](const FCycleCandidate& Left, const FCycleCandidate& Right)
+	{
+		if (Left.DistanceSquared != Right.DistanceSquared)
+		{
+			return Left.DistanceSquared < Right.DistanceSquared;
+		}
+
+		return Left.UniqueID < Right.UniqueID;
+	});
+
+	int32 CurrentIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+	{
+		if (Candidates[Index].Target == CurrentTarget.Get())
+		{
+			CurrentIndex = Index;
+			break;
+		}
+	}
+
+	const int32 NextIndex = CurrentIndex == INDEX_NONE
+		? 0
+		: (CurrentIndex + 1) % Candidates.Num();
+	// SetTarget 内部直接替换目标，A->B 只会广播一次，不经过 ClearTarget。
+	return SetTarget(Candidates[NextIndex].Target);
+}
+
 bool UZCTargetLockComponent::AcquireBestTarget(
 	const FVector& ViewLocation,
 	const FVector& ViewForward)
@@ -192,18 +296,26 @@ void UZCTargetLockComponent::TickComponent(
 		return;
 	}
 
-	// 目标持续可见性从玩家的实际视点开始检查；没有 PlayerController 的
-	// 非玩家/自动化对象才回退到拥有者位置，避免锁定被相机臂遮挡判断误导。
+	// 本地玩家目标还必须处于屏幕安全区内；非玩家/自动化对象没有本地视点
+	// 时才回退到拥有者位置，避免测试对象被强行依赖屏幕投影。
 	FVector ViewLocation = OwnerLocation;
 	if (const APawn* PawnOwner = Cast<APawn>(Owner))
 	{
-		if (const APlayerController* PlayerController = Cast<APlayerController>(PawnOwner->GetController()))
+		if (PawnOwner->IsLocallyControlled())
 		{
+			const APlayerController* PlayerController = Cast<APlayerController>(PawnOwner->GetController());
+			if (!PlayerController)
+			{
+				ClearTarget();
+				return;
+			}
+
 			FRotator ViewRotation;
 			PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
-			if (!IsFiniteVector(ViewLocation))
+			if (!IsTargetInScreenSafeArea(Target, PlayerController, ViewLocation, ViewRotation))
 			{
-				ViewLocation = OwnerLocation;
+				ClearTarget();
+				return;
 			}
 		}
 	}
@@ -281,6 +393,60 @@ bool UZCTargetLockComponent::IsTargetVisible(const AActor* Candidate, const FVec
 
 	// 没有阻挡体，或第一阻挡体就是候选目标本身，都视为可见。
 	return !bHit || HitResult.GetActor() == Candidate;
+}
+
+bool UZCTargetLockComponent::IsTargetInScreenSafeArea(
+	const AActor* Candidate,
+	const APlayerController* PlayerController,
+	const FVector& ViewLocation,
+	const FRotator& ViewRotation) const
+{
+	if (!IsValidTarget(Candidate)
+		|| !PlayerController
+		|| !IsFiniteVector(ViewLocation)
+		|| !IsFiniteVector(ViewRotation.Vector()))
+	{
+		return false;
+	}
+
+	const IZCTargetable* Targetable = Cast<IZCTargetable>(Candidate);
+	const FVector TargetLocation = Targetable
+		? Targetable->GetTargetLockLocation()
+		: FVector::ZeroVector;
+	if (!Targetable || !IsFiniteVector(TargetLocation))
+	{
+		return false;
+	}
+
+	const FVector ToTarget = TargetLocation - ViewLocation;
+	if (!IsFiniteVector(ToTarget) || ToTarget.IsNearlyZero()
+		|| FVector::DotProduct(ViewRotation.Vector(), ToTarget) <= 0.0f)
+	{
+		return false;
+	}
+
+	FVector2D ScreenPosition;
+	if (!PlayerController->ProjectWorldLocationToScreen(TargetLocation, ScreenPosition, true))
+	{
+		return false;
+	}
+
+	int32 ViewportSizeX = 0;
+	int32 ViewportSizeY = 0;
+	PlayerController->GetViewportSize(ViewportSizeX, ViewportSizeY);
+	if (ViewportSizeX <= 0 || ViewportSizeY <= 0
+		|| !FMath::IsFinite(ScreenPosition.X) || !FMath::IsFinite(ScreenPosition.Y))
+	{
+		return false;
+	}
+
+	const float SafeMargin = FMath::Clamp(ScreenSafeMargin, 0.0f, 0.25f);
+	const float MinX = static_cast<float>(ViewportSizeX) * SafeMargin;
+	const float MaxX = static_cast<float>(ViewportSizeX) * (1.0f - SafeMargin);
+	const float MinY = static_cast<float>(ViewportSizeY) * SafeMargin;
+	const float MaxY = static_cast<float>(ViewportSizeY) * (1.0f - SafeMargin);
+	return ScreenPosition.X >= MinX && ScreenPosition.X <= MaxX
+		&& ScreenPosition.Y >= MinY && ScreenPosition.Y <= MaxY;
 }
 
 void UZCTargetLockComponent::ReplaceTarget(AActor* NewTarget)

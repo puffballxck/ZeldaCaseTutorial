@@ -19,6 +19,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "UI/ZCHeartHealthWidget.h"
 
 namespace
 {
@@ -202,13 +203,24 @@ bool FZCPlayerDamageLifecycleTest::RunTest(const FString& Parameters)
 	}
 
 	Player->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	UZCHeartHealthWidget* Hearts = CreateWidget<UZCHeartHealthWidget>(World, UZCHeartHealthWidget::StaticClass());
+	TestNotNull(TEXT("The native heart HUD can be created"), Hearts);
+	if (!Hearts)
+	{
+		return false;
+	}
+	Hearts->SetAttributes(Player->Attributes);
+	Hearts->SetAttributes(Player->Attributes);
+	TestEqual(TEXT("The HUD initializes with three full hearts"), Hearts->GetDisplayedHalfHearts(), 6);
 	TestTrue(TEXT("A living player can acquire a target"), Player->TargetLock->SetTarget(LockTarget));
 	AddExpectedError(TEXT("cannot play Hit React"), EAutomationExpectedErrorFlags::Contains, 1);
 	AddExpectedError(TEXT("cannot play Death Montage"), EAutomationExpectedErrorFlags::Contains, 1);
 	FDamageEvent DamageEvent;
 	const float NonLethalDamage = Player->TakeDamage(25.0f, DamageEvent, nullptr, LockTarget);
-	TestEqual(TEXT("Non-lethal player damage is applied"), NonLethalDamage, 25.0f);
-	TestEqual(TEXT("Non-lethal player damage reduces health"), Player->Attributes->GetHealth(), 75.0f);
+	const float HalfHeart = Player->Attributes->GetMaxHealth() / 6.0f;
+	TestTrue(TEXT("One valid hit removes half a heart"), FMath::IsNearlyEqual(NonLethalDamage, HalfHeart, 0.001f));
+	TestTrue(TEXT("Five half-hearts remain after the first hit"), FMath::IsNearlyEqual(Player->Attributes->GetHealth(), HalfHeart * 5.0f, 0.001f));
+	TestEqual(TEXT("A real player damage event updates the HUD"), Hearts->GetDisplayedHalfHearts(), 5);
 	TestEqual(
 		TEXT("A missing hit montage cannot leave combat locked"),
 		Player->Combat->GetCombatAvailability(),
@@ -219,8 +231,21 @@ bool FZCPlayerDamageLifecycleTest::RunTest(const FString& Parameters)
 		Player->GetCharacterMovement()->MovementMode,
 		MOVE_Walking);
 
-	const float LethalDamage = Player->TakeDamage(1000.0f, DamageEvent, nullptr, LockTarget);
-	TestEqual(TEXT("Lethal player damage is limited to remaining health"), LethalDamage, 75.0f);
+	TestEqual(TEXT("Zero damage does not consume a heart"), Player->TakeDamage(0.0f, DamageEvent, nullptr, LockTarget), 0.0f);
+	TestEqual(TEXT("Negative damage does not consume a heart"), Player->TakeDamage(-1.0f, DamageEvent, nullptr, LockTarget), 0.0f);
+	for (int32 Hit = 2; Hit <= 5; ++Hit)
+	{
+		const float Applied = Player->TakeDamage(Hit % 2 ? 1000.0f : 1.0f, DamageEvent, nullptr, LockTarget);
+		TestTrue(TEXT("Small and large incoming hits both remove one half-heart"), FMath::IsNearlyEqual(Applied, HalfHeart, 0.001f));
+		TestTrue(TEXT("Half-heart health matches the hit count"), FMath::IsNearlyEqual(Player->Attributes->GetHealth(), HalfHeart * (6 - Hit), 0.001f));
+		TestFalse(TEXT("The first five hits cannot kill a full-health player"), Player->IsDeathStarted());
+		TestEqual(TEXT("The HUD follows each half-heart loss"), Hearts->GetDisplayedHalfHearts(), 6 - Hit);
+	}
+	const float RemainingHealth = Player->Attributes->GetHealth();
+	const float LethalDamage = Player->TakeDamage(1.0f, DamageEvent, nullptr, LockTarget);
+	TestEqual(TEXT("The sixth hit consumes the final half-heart exactly"), LethalDamage, RemainingHealth);
+	TestEqual(TEXT("No floating-point health survives the sixth hit"), Player->Attributes->GetHealth(), 0.0f);
+	TestEqual(TEXT("Death leaves all three hearts empty"), Hearts->GetDisplayedHalfHearts(), 0);
 	TestTrue(TEXT("Player death starts once"), Player->IsDeathStarted());
 	TestFalse(TEXT("A dead player cannot be damaged"), Player->CanBeDamaged());
 	TestFalse(TEXT("A dead player cannot be target locked"), Player->CanBeTargetLocked());
@@ -242,6 +267,14 @@ bool FZCPlayerDamageLifecycleTest::RunTest(const FString& Parameters)
 		EZCCombatAvailability::Disabled);
 	const float RepeatedDamage = Player->TakeDamage(10.0f, DamageEvent, nullptr, LockTarget);
 	TestEqual(TEXT("Repeated player damage after death is ignored"), RepeatedDamage, 0.0f);
+	UZCAttributeComponent* ReplacementAttributes = NewObject<UZCAttributeComponent>();
+	Hearts->SetAttributes(ReplacementAttributes);
+	TestEqual(TEXT("Rebinding initializes the replacement pawn's health"), Hearts->GetDisplayedHalfHearts(), 6);
+	Player->Attributes->OnHealthChanged.Broadcast(50.0f, 0.0f);
+	TestEqual(TEXT("The old pawn cannot update the rebound HUD"), Hearts->GetDisplayedHalfHearts(), 6);
+	Hearts->SetAttributes(nullptr);
+	ReplacementAttributes->ApplyDamage(50.0f);
+	TestEqual(TEXT("Unbinding removes the health listener"), Hearts->GetDisplayedHalfHearts(), 6);
 	return true;
 }
 

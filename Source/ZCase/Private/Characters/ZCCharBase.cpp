@@ -31,6 +31,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "InputAction.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectGlobals.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZCPlayerCombat, Log, All);
 
@@ -118,6 +119,12 @@ AZCCharBase::AZCCharBase()
 	static ConstructorHelpers::FObjectFinder<UInputAction> AttackActionFinder(
 		TEXT("/Game/_Game/Data/Inputs/IA_Attack.IA_Attack"));
 	AttackAction = AttackActionFinder.Object;
+
+	// Keep the independent unlock binding functional even when an older
+	// BP_Player has not yet serialized the newly added property.
+	static ConstructorHelpers::FObjectFinder<UInputAction> TargetUnlockActionFinder(
+		TEXT("/Game/_Game/Data/Inputs/IA_TargetUnlock.IA_TargetUnlock"));
+	TargetUnlockAction = TargetUnlockActionFinder.Object;
 	PhysicsHandle->LinearDamping = 100.0f;//线性阻尼
 	PhysicsHandle->LinearStiffness = 325.0f;//硬度
 	PhysicsHandle->AngularDamping = 250.0f;//环形阻尼
@@ -233,19 +240,25 @@ float AZCCharBase::TakeDamage(
 	AController* EventInstigator,
 	AActor* DamageCauser)
 {
-	if (bDeathStarted || !CanBeDamaged() || !FMath::IsFinite(DamageAmount) || DamageAmount <= 0.0f)
+	if (bDeathStarted || bDamageProcessing || !CanBeDamaged() || !FMath::IsFinite(DamageAmount) || DamageAmount <= 0.0f)
 	{
 		return 0.0f;
 	}
 
+	TGuardValue<bool> DamageGuard(bDamageProcessing, true);
 	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门。
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
-	if (!Attributes || EngineDamage <= 0.0f)
+	if (!Attributes || !FMath::IsFinite(EngineDamage) || EngineDamage <= 0.0f)
 	{
 		return 0.0f;
 	}
 
-	const FZCDamageResult Result = Attributes->ApplyDamage(EngineDamage);
+	// 三颗心共六个半心：每次有效命中固定扣半心，不改变敌人的伤害规则。
+	const float HalfHeartHealth = Attributes->GetMaxHealth() / 6.0f;
+	// 消除连续六次减法的浮点尾差，保证最后半心扣完时立即进入死亡。
+	const float HealthDamage = Attributes->GetHealth() <= HalfHeartHealth + KINDA_SMALL_NUMBER
+		? Attributes->GetHealth() : HalfHeartHealth;
+	const FZCDamageResult Result = Attributes->ApplyDamage(HealthDamage);
 	if (Result.AppliedDamage <= 0.0f)
 	{
 		return 0.0f;
@@ -454,8 +467,8 @@ void AZCCharBase::Look_Triggered(const FInputActionValue& val)
 	FVector2d LookVal = val.Get<FVector2d>();
 	if (Controller == nullptr)return;
 
-	// 锁定只增加相机自动对准，不屏蔽原有 Look 输入；玩家的输入仍先作用于
-	// Controller Rotation，随后由 Tick 以 RInterpTo 平滑收敛到目标方向。
+	// 目标锁定只控制角色水平朝向，不接管 Controller Rotation。
+	// 锁定期间玩家仍可完全自由地转动并保持相机视角。
 	AddControllerYawInput(LookVal.X);
 	AddControllerPitchInput(LookVal.Y);
 }
@@ -467,23 +480,22 @@ void AZCCharBase::TargetLock_Started(const FInputActionValue& val)
 		return;
 	}
 
-	if (TargetLock->HasTarget())
-	{
-		// Started 的第二次触发始终负责解除当前锁定。
-		TargetLock->ClearTarget();
-		return;
-	}
-
 	// Enhanced Input 本身只会在本地玩家上触发；这里再显式保护一次，避免
-	// 服务器或远程代理角色意外驱动本地相机状态。
-	if (!IsLocallyControlled() || !FollowCamera)
+	// 服务器或远程代理角色意外驱动本地目标循环。
+	if (!IsLocallyControlled())
 	{
 		return;
 	}
 
-	TargetLock->AcquireBestTarget(
-		FollowCamera->GetComponentLocation(),
-		FollowCamera->GetForwardVector());
+	TargetLock->CycleTarget();
+}
+
+void AZCCharBase::TargetUnlock_Started(const FInputActionValue& val)
+{
+	if (TargetLock)
+	{
+		TargetLock->ClearTarget();
+	}
 }
 
 #pragma endregion 
@@ -675,7 +687,6 @@ void AZCCharBase::Tick(float DeltaTime)
 	if (bTargetLockRotationActive)
 	{
 		UpdateTargetLockOrientation(DeltaTime);
-		UpdateTargetLockCamera(DeltaTime);
 	}
 
 	//检测当前聚焦目标是否是潜在的可磁铁吸附目标，或更新拖拽位置
@@ -700,6 +711,19 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	if (TargetLockAction)
 	{
 		EIComp->BindAction(TargetLockAction, ETriggerEvent::Started, this, &AZCCharBase::TargetLock_Started);
+	}
+
+	// Keep old BP_Player assets functional until their new exposed property is saved.
+	if (!TargetUnlockAction)
+	{
+		TargetUnlockAction = LoadObject<UInputAction>(
+			nullptr,
+			TEXT("/Game/_Game/Data/Inputs/IA_TargetUnlock.IA_TargetUnlock"));
+	}
+
+	if (TargetUnlockAction)
+	{
+		EIComp->BindAction(TargetUnlockAction, ETriggerEvent::Started, this, &AZCCharBase::TargetUnlock_Started);
 	}
 	
 	EIComp->BindAction(SprintAction,ETriggerEvent::Triggered,this,&AZCCharBase::Sprint_Triggered);
@@ -1714,77 +1738,6 @@ void AZCCharBase::SetTargetLockRotationMode(const bool bEnableTargetLockRotation
 	}
 }
 
-void AZCCharBase::UpdateTargetLockCamera(const float DeltaTime)
-{
-	if (!bTargetLockRotationActive || bDeathStarted || !TargetLock || !TargetLock->HasTarget()
-		|| !IsLocallyControlled() || !FollowCamera)
-	{
-		return;
-	}
-
-	APlayerController* PlayerController = Cast<APlayerController>(Controller);
-	if (!PlayerController)
-	{
-		return;
-	}
-
-	AActor* CurrentTarget = TargetLock->GetCurrentTarget();
-	if (!IsValid(CurrentTarget) || !CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass()))
-	{
-		TargetLock->ClearTarget();
-		return;
-	}
-
-	const IZCTargetable* Targetable = Cast<IZCTargetable>(CurrentTarget);
-	if (!Targetable || !Targetable->CanBeTargetLocked())
-	{
-		TargetLock->ClearTarget();
-		return;
-	}
-
-	const FVector CameraOrigin = CameraBoom
-		? CameraBoom->GetComponentLocation()
-		: FollowCamera->GetComponentLocation();
-	const FVector ToTarget = Targetable->GetTargetLockLocation() - CameraOrigin;
-	if (ToTarget.ContainsNaN() || ToTarget.IsNearlyZero())
-	{
-		return;
-	}
-
-	const FRotator DesiredRotation = ToTarget.Rotation();
-	const FRotator CurrentRotation = PlayerController->GetControlRotation();
-	if (!FMath::IsFinite(DesiredRotation.Pitch) || !FMath::IsFinite(DesiredRotation.Yaw)
-		|| !FMath::IsFinite(CurrentRotation.Pitch) || !FMath::IsFinite(CurrentRotation.Yaw))
-	{
-		return;
-	}
-
-	const float MinPitch = FMath::Min(TargetLockCameraMinPitch, TargetLockCameraMaxPitch);
-	const float MaxPitch = FMath::Max(TargetLockCameraMinPitch, TargetLockCameraMaxPitch);
-	FRotator ClampedDesiredRotation = DesiredRotation;
-	ClampedDesiredRotation.Pitch = FMath::Clamp(FRotator::NormalizeAxis(DesiredRotation.Pitch), MinPitch, MaxPitch);
-	ClampedDesiredRotation.Roll = 0.0f;
-
-	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
-	const float SafeInterpSpeed = FMath::Max(TargetLockCameraInterpSpeed, 0.0f);
-	if (!FMath::IsFinite(SafeInterpSpeed))
-	{
-		return;
-	}
-
-	FRotator NewControlRotation = FMath::RInterpTo(
-		CurrentRotation,
-		ClampedDesiredRotation,
-		SafeDeltaTime,
-		SafeInterpSpeed);
-	NewControlRotation.Pitch = FMath::Clamp(FRotator::NormalizeAxis(NewControlRotation.Pitch), MinPitch, MaxPitch);
-	NewControlRotation.Roll = 0.0f;
-	if (FMath::IsFinite(NewControlRotation.Pitch) && FMath::IsFinite(NewControlRotation.Yaw))
-	{
-		// 保留 Look_Triggered 已经写入的当前旋转，仅将其向锁定目标平滑插值。
-		PlayerController->SetControlRotation(NewControlRotation);
-	}
-}
 #pragma endregion
 
 

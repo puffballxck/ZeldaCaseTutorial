@@ -8,6 +8,8 @@
 #include "ZCCombatComponent.generated.h"
 
 class UAnimMontage;
+class UAnimInstance;
+class UMeshComponent;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
 struct FActorComponentTickFunction;
@@ -23,7 +25,7 @@ enum class EZCCombatAvailability : uint8
 	Disabled
 };
 
-/** 一次武器接触完成伤害结算后提供给表现层的稳定结果。 */
+/** 一次攻击接触完成伤害结算后提供给表现层的稳定结果。 */
 USTRUCT(BlueprintType)
 struct ZCASE_API FZCCombatHitResult
 {
@@ -58,8 +60,14 @@ struct ZCASE_API FZCCombatHitResult
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
-	FZCHitResolvedSignature,
+FZCHitResolvedSignature,
 	const FZCCombatHitResult&, Result);
+
+/** 一次攻击生命周期结束时广播；参数表示蒙太奇是否被打断。 */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FZCAttackEndedSignature,
+	bool,
+	bInterrupted);
 
 UENUM(BlueprintType)
 enum class EZCWeaponState : uint8
@@ -96,7 +104,7 @@ enum class EZCWeaponAttachmentState : uint8
 	Equipped
 };
 
-/** 管理武器状态、装备挂点、攻击生命周期，以及一次攻击内的命中去重规则。 */
+/** 管理装备或骨骼端点驱动的攻击生命周期、命中窗口和一次攻击内的去重规则。 */
 UCLASS(ClassGroup = (ZCase), meta = (BlueprintSpawnableComponent))
 class ZCASE_API UZCCombatComponent : public UActorComponent
 {
@@ -111,6 +119,46 @@ public:
 		UStaticMeshComponent* InSwordMesh,
 		UStaticMeshComponent* InSheathMesh,
 		UStaticMeshComponent* InShieldMesh);
+
+	/**
+	 * 初始化非装备攻击的动画网格和轨迹端点。
+	 *
+	 * Trace mesh 可以是静态网格或骨骼网格；骨骼网格端点允许直接使用骨骼名。
+	 * 该初始化不会改变武器装备状态，只接管攻击蒙太奇所需的网格和轨迹来源。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void InitializeAttackSource(
+		USkeletalMeshComponent* InCharacterMesh,
+		UMeshComponent* InTraceMesh,
+		FName InTraceBasePoint,
+		FName InTraceTipPoint);
+
+	/** 设置由 TryAttack 播放的攻击蒙太奇。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void SetAttackMontage(UAnimMontage* InAttackMontage);
+
+	/** 设置攻击轨迹每次有效接触请求的伤害值。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void SetTraceDamage(float InTraceDamage);
+
+	/** 设置攻击轨迹 Sweep 球体半径，单位为厘米。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void SetTraceRadius(float InTraceRadius);
+
+	/**
+	 * 设置是否只允许玩家控制的 Pawn 通过本组件造成伤害。
+	 * 默认关闭，保留玩家装备攻击对任意有效目标的原有行为；敌人可打开它来避免误伤同类。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void SetPlayerOnlyDamage(bool bInPlayerOnlyDamage);
+
+	/** 在不要求武器处于 Equipped 的情况下开始一次攻击；敌人 AI 使用该入口。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	bool TryAttack();
+
+	/** 取消当前攻击并关闭命中窗口；不会进入受击状态或改变玩家的输入状态机。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
+	void CancelAttack();
 
 	/** 将攻击输入按当前武器状态解释为拔刀或攻击。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Weapon")
@@ -179,13 +227,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	void EndTrace();
 
-	/** 在有效命中窗口内结算完整碰撞；同一攻击不会重复命中同一目标。 */
+	/** 在有效命中窗口内结算碰撞；同一攻击不会重复命中同一目标。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	FZCCombatHitResult TryApplyHit(const FHitResult& Hit, float DamageAmount);
 
 	/** 每次攻击中首次登记某目标后广播，实际伤害允许为零。 */
 	UPROPERTY(BlueprintAssignable, Category = "ZCase|Combat|Hit")
 	FZCHitResolvedSignature OnHitResolved;
+
+	/** 攻击蒙太奇正常结束或被打断关闭攻击生命周期后广播一次。 */
+	UPROPERTY(BlueprintAssignable, Category = "ZCase|Combat|Attack")
+	FZCAttackEndedSignature OnAttackEnded;
 
 	/** 返回当前是否处于可登记命中的窗口。 */
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
@@ -210,10 +262,12 @@ private:
 	void HandleDrawMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void HandleAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void HandleSheathMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+	void ClearAttackMontageEndDelegate(UAnimInstance* AnimInstance);
 	void ScheduleAutoSheath();
 	void ClearAutoSheathTimer();
 	void HandleAutoSheathElapsed();
-	void FinishAttack();
+	/** 关闭攻击生命周期并返回关闭前是否存在活动攻击。 */
+	bool FinishAttack();
 	void ScheduleAttachmentSwitch(
 		EZCWeaponAttachmentState AttachmentState,
 		const UAnimMontage* Montage,
@@ -274,6 +328,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> ShieldMesh;
 
+	/** 当前用于攻击轨迹的来源网格；玩家是剑网格，敌人可以直接使用骨骼网格。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMeshComponent> TraceSourceMesh;
+
 	/** 剑在手中的骨骼挂点。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Sockets")
 	FName WeaponHandSocket = TEXT("WeaponHand_R");
@@ -306,6 +364,9 @@ private:
 	/** 当前攻击窗口的伤害值。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace", meta = (ClampMin = "0.0"))
 	float TraceDamage = 25.0f;
+	/** 是否将命中目标限制为玩家控制的 Pawn；默认为 false。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace")
+	bool bPlayerOnlyDamage = false;
 	/** 剑身 Sweep 球体半径，单位为厘米。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace", meta = (ClampMin = "0.0"))
 	float TraceRadius = 8.0f;
@@ -318,7 +379,7 @@ private:
 	/** 是否在编辑器/开发构建中绘制当前剑身轨迹。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace")
 	bool bDebugDrawTrace = false;
-	/** 剑身根部和尖端的 Static Mesh socket。 */
+	/** 攻击轨迹来源网格的起点和终点；骨骼网格也可填写骨骼名。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace|Sockets")
 	FName TraceBaseSocket = TEXT("Trace_Base");
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Trace|Sockets")
