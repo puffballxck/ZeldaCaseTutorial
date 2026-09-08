@@ -9,6 +9,7 @@
 
 class UAnimMontage;
 class UAnimInstance;
+class UAnimSequenceBase;
 class UMeshComponent;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
@@ -133,7 +134,7 @@ public:
 		FName InTraceBasePoint,
 		FName InTraceTipPoint);
 
-	/** 设置由 TryAttack 播放的攻击蒙太奇。 */
+	/** 设置由 TryAttack 播放的攻击蒙太奇；敌人 AI 每次攻击前可覆盖它。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Attack")
 	void SetAttackMontage(UAnimMontage* InAttackMontage);
 
@@ -227,6 +228,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	void EndTrace();
 
+	/**
+	 * 由 ZC Weapon Trace NotifyState 的 NotifyEnd 调用。
+	 * 玩家已经排队下一次攻击时，在当前命中窗口结束处直接切换下一段，跳过收刀尾段。
+	 */
+	void HandleAttackTraceWindowEnded(UAnimSequenceBase* Animation);
+
 	/** 在有效命中窗口内结算碰撞；同一攻击不会重复命中同一目标。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat")
 	FZCCombatHitResult TryApplyHit(const FHitResult& Hit, float DamageAmount);
@@ -257,8 +264,15 @@ private:
 	bool GetTraceSocketLocations(FVector& OutBase, FVector& OutTip);
 	void DisableTraceTick();
 	bool StartDraw();
-	bool StartWeaponAttack();
-	bool PlayMontage(UAnimMontage* Montage, void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool));
+	bool StartWeaponAttack(UAnimMontage* Montage, bool bUsePlayerCombo);
+	bool ContinuePlayerAttackCombo();
+	UAnimMontage* ResolvePlayerAttackMontage() const;
+	void ResetPlayerAttackCombo();
+	void AdvancePlayerAttackCombo();
+	bool PlayMontage(
+		UAnimMontage* Montage,
+		void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool),
+		float BlendInOverride = -1.0f);
 	void HandleDrawMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void HandleAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void HandleSheathMontageEnded(UAnimMontage* Montage, bool bInterrupted);
@@ -286,6 +300,18 @@ private:
 	/** 武器已装备时播放的攻击蒙太奇。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
 	TObjectPtr<UAnimMontage> AttackMontage;
+
+	/** 玩家第二次攻击使用的连段蒙太奇。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
+	TObjectPtr<UAnimMontage> AttackMontage02;
+
+	/** 玩家第三次攻击使用的连段蒙太奇。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
+	TObjectPtr<UAnimMontage> AttackMontage03;
+
+	/** 玩家第四段终结攻击；完整收招后开始新连段。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
+	TObjectPtr<UAnimMontage> AttackMontage04;
 
 	/** 武器保持 Equipped 后自动请求收刀的等待秒数。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon", meta = (ClampMin = "0.1"))
@@ -356,6 +382,17 @@ private:
 	EZCWeaponAttachmentState PendingAttachmentState = EZCWeaponAttachmentState::Sheathed;
 	/** 当前是否存在一条尚未结束的攻击生命周期。 */
 	bool bAttackActive = false;
+	/** 当前正在播放的攻击蒙太奇；玩家连段和敌人 AI 都通过它校验结束回调。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveAttackMontage;
+	/** 当前玩家连段序号：0、1、2、3 分别对应 Attack01/02/03/04。 */
+	int32 PlayerAttackComboIndex = 0;
+	/** 当前生命周期是否由玩家连段入口启动。 */
+	bool bActivePlayerAttackCombo = false;
+	/** 玩家在当前攻击窗口结束前是否已经按下下一次攻击。 */
+	bool bPlayerAttackQueued = false;
+	/** 当前段的 ZC Weapon Trace 窗口是否已经结束，用于收刀尾段中的预输入衔接。 */
+	bool bPlayerAttackTraceWindowEnded = false;
 	/** 当前是否处于可登记命中的窗口。 */
 	bool bTraceActive = false;
 	/** 本次攻击已经命中的目标集合，用于去重。 */

@@ -330,7 +330,7 @@ protected:
 	UFUNCTION()
 	void Interact_Started(const FInputActionValue& val);
 
-	/** Enhanced Input 的攻击 Started 回调；仅把输入转发给战斗组件。 */
+	/** Enhanced Input 的统一左键 Started 回调；按交互/技能状态分流。 */
 	UFUNCTION()
 	void Attack_Started(const FInputActionValue& val);
 	

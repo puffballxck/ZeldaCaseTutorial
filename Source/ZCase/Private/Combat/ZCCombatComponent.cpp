@@ -2,6 +2,7 @@
 
 #include "Combat/ZCCombatComponent.h"
 
+#include "AlphaBlend.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Combat/ZCAttributeComponent.h"
@@ -34,6 +35,18 @@ UZCCombatComponent::UZCCombatComponent()
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageFinder(
 		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_01.AM_Attack_01"));
 	AttackMontage = AttackMontageFinder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage02Finder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_02.AM_Attack_02"));
+	AttackMontage02 = AttackMontage02Finder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage03Finder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_03.AM_Attack_03"));
+	AttackMontage03 = AttackMontage03Finder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage04Finder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_04.AM_Attack_04"));
+	AttackMontage04 = AttackMontage04Finder.Object;
 }
 
 void UZCCombatComponent::InitializeEquipment(
@@ -45,6 +58,11 @@ void UZCCombatComponent::InitializeEquipment(
 	// 重新绑定装备时切断旧攻击生命周期，避免旧的 Notify/Tick 继续使用已失效的 socket。
 	EndTrace();
 	bAttackActive = false;
+	ActiveAttackMontage = nullptr;
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ResetPlayerAttackCombo();
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	CharacterMesh = InCharacterMesh;
@@ -67,6 +85,10 @@ void UZCCombatComponent::InitializeAttackSource(
 	// 重新绑定攻击来源时关闭旧窗口，但不改变死亡后的 Disabled 状态。
 	EndTrace();
 	bAttackActive = false;
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ActiveAttackMontage = nullptr;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	CharacterMesh = InCharacterMesh;
@@ -87,6 +109,31 @@ void UZCCombatComponent::InitializeAttackSource(
 void UZCCombatComponent::SetAttackMontage(UAnimMontage* InAttackMontage)
 {
 	AttackMontage = InAttackMontage;
+}
+
+UAnimMontage* UZCCombatComponent::ResolvePlayerAttackMontage() const
+{
+	switch (PlayerAttackComboIndex)
+	{
+	case 1:
+		return AttackMontage02.Get();
+	case 2:
+		return AttackMontage03.Get();
+	case 3:
+		return AttackMontage04.Get();
+	default:
+		return AttackMontage.Get();
+	}
+}
+
+void UZCCombatComponent::ResetPlayerAttackCombo()
+{
+	PlayerAttackComboIndex = 0;
+}
+
+void UZCCombatComponent::AdvancePlayerAttackCombo()
+{
+	PlayerAttackComboIndex = FMath::Min(PlayerAttackComboIndex + 1, 3);
 }
 
 void UZCCombatComponent::SetTraceDamage(const float InTraceDamage)
@@ -127,12 +174,25 @@ bool UZCCombatComponent::HandleAttackInput()
 		return false;
 	}
 
+	// 玩家连段允许在当前命中窗口结束前预输入一次；NotifyEnd 会在不播放收刀尾段的情况下接上下一段。
+	if (bActivePlayerAttackCombo && bAttackActive && WeaponState == EZCWeaponState::Attacking)
+	{
+		// 终结段必须完成收招，连点不能跳回第一段取消它。
+		if (PlayerAttackComboIndex >= 3)
+		{
+			return false;
+		}
+		bPlayerAttackQueued = true;
+		// Trace 窗口已经结束时不再等待 Montage 末尾，直接跳过收刀尾段。
+		return bPlayerAttackTraceWindowEnded ? ContinuePlayerAttackCombo() : true;
+	}
+
 	switch (ResolveAttackCommand(WeaponState))
 	{
 	case EZCWeaponCommand::Draw:
 		return StartDraw();
 	case EZCWeaponCommand::Attack:
-		return StartWeaponAttack();
+		return StartWeaponAttack(ResolvePlayerAttackMontage(), true);
 	default:
 		return false;
 	}
@@ -147,13 +207,15 @@ bool UZCCombatComponent::TryAttack()
 		return false;
 	}
 
-	return StartWeaponAttack();
+	return StartWeaponAttack(AttackMontage.Get(), false);
 }
 
 void UZCCombatComponent::CancelAttack()
 {
 	// 先关闭状态和 Trace，再停止 Montage；Montage 的旧结束回调会因状态已改变而失效。
 	const bool bHadActiveAttack = FinishAttack();
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
 	if (WeaponState == EZCWeaponState::Attacking)
 	{
 		WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
@@ -165,16 +227,23 @@ void UZCCombatComponent::CancelAttack()
 	{
 		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
 		{
-			if (AttackMontage && AnimInstance->Montage_IsPlaying(AttackMontage))
+			if (ActiveAttackMontage && AnimInstance->Montage_IsPlaying(ActiveAttackMontage.Get()))
 			{
 				// Remove the old delegate before starting blend-out. Otherwise a
 				// subsequent attack using the same montage could receive the old
 				// instance's end callback and finish the new lifecycle.
 				ClearAttackMontageEndDelegate(AnimInstance);
-				AnimInstance->Montage_Stop(0.05f, AttackMontage);
+				AnimInstance->Montage_Stop(0.05f, ActiveAttackMontage.Get());
 			}
 		}
 	}
+
+	if (bActivePlayerAttackCombo)
+	{
+		ResetPlayerAttackCombo();
+	}
+	bActivePlayerAttackCombo = false;
+	ActiveAttackMontage = nullptr;
 
 	if (bHadActiveAttack)
 	{
@@ -206,9 +275,9 @@ bool UZCCombatComponent::StartDraw()
 	return false;
 }
 
-bool UZCCombatComponent::StartWeaponAttack()
+bool UZCCombatComponent::StartWeaponAttack(UAnimMontage* Montage, const bool bUsePlayerCombo)
 {
-	if (!CanAcceptCombatInput() || bAttackActive || WeaponState == EZCWeaponState::Attacking)
+	if (!CanAcceptCombatInput() || bAttackActive || WeaponState == EZCWeaponState::Attacking || !Montage)
 	{
 		return false;
 	}
@@ -216,9 +285,13 @@ bool UZCCombatComponent::StartWeaponAttack()
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Attacking;
+	ActiveAttackMontage = Montage;
+	bActivePlayerAttackCombo = bUsePlayerCombo;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
 	// 攻击窗口由动画或调用方显式打开，开始攻击本身不会立即造成命中。
 	StartAttack();
-	if (PlayMontage(AttackMontage, &UZCCombatComponent::HandleAttackMontageEnded))
+	if (PlayMontage(ActiveAttackMontage.Get(), &UZCCombatComponent::HandleAttackMontageEnded))
 	{
 		return true;
 	}
@@ -226,6 +299,14 @@ bool UZCCombatComponent::StartWeaponAttack()
 	const bool bHadActiveAttack = FinishAttack();
 	WeaponState = EZCWeaponState::Equipped;
 	ScheduleAutoSheath();
+	if (bActivePlayerAttackCombo)
+	{
+		ResetPlayerAttackCombo();
+	}
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ActiveAttackMontage = nullptr;
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(true);
@@ -242,6 +323,9 @@ bool UZCCombatComponent::RequestSheath()
 
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ResetPlayerAttackCombo();
 	// 只允许从稳定的 Equipped 状态进入收刀，避免与其他过渡竞争挂点。
 	WeaponState = EZCWeaponState::Sheathing;
 	if (PlayMontage(SheathSwordMontage, &UZCCombatComponent::HandleSheathMontageEnded))
@@ -260,7 +344,8 @@ bool UZCCombatComponent::RequestSheath()
 
 bool UZCCombatComponent::PlayMontage(
 	UAnimMontage* Montage,
-	void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool))
+	void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool),
+	const float BlendInOverride)
 {
 	if (!CharacterMesh || !Montage)
 	{
@@ -268,7 +353,15 @@ bool UZCCombatComponent::PlayMontage(
 	}
 
 	UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance();
-	if (!AnimInstance || AnimInstance->Montage_Play(Montage) <= 0.0f)
+	if (!AnimInstance)
+	{
+		return false;
+	}
+
+	const float PlayLength = BlendInOverride >= 0.0f
+		? AnimInstance->Montage_PlayWithBlendIn(Montage, FAlphaBlendArgs(BlendInOverride))
+		: AnimInstance->Montage_Play(Montage);
+	if (PlayLength <= 0.0f)
 	{
 		return false;
 	}
@@ -277,6 +370,67 @@ bool UZCCombatComponent::PlayMontage(
 	EndDelegate.BindUObject(this, EndCallback);
 	AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
 	return true;
+}
+
+bool UZCCombatComponent::ContinuePlayerAttackCombo()
+{
+	if (!CanAcceptCombatInput()
+		|| !bActivePlayerAttackCombo
+		|| !bAttackActive
+		|| !bPlayerAttackQueued
+		|| !bPlayerAttackTraceWindowEnded
+		|| PlayerAttackComboIndex >= 3
+		|| WeaponState != EZCWeaponState::Attacking
+		|| !CharacterMesh)
+	{
+		return false;
+	}
+
+	UAnimMontage* PreviousMontage = ActiveAttackMontage.Get();
+	UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance();
+	if (!AnimInstance)
+	{
+		return false;
+	}
+
+	const int32 PreviousComboIndex = PlayerAttackComboIndex;
+	AdvancePlayerAttackCombo();
+	UAnimMontage* NextMontage = ResolvePlayerAttackMontage();
+	if (!NextMontage)
+	{
+		PlayerAttackComboIndex = PreviousComboIndex;
+		bPlayerAttackQueued = false;
+		return false;
+	}
+
+	// 先摘掉上一段的结束回调，再让新段接管；旧段淡出不能结束新攻击。
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	if (PreviousMontage && AnimInstance->Montage_IsPlaying(PreviousMontage))
+	{
+		ClearAttackMontageEndDelegate(AnimInstance);
+	}
+
+	ActiveAttackMontage = NextMontage;
+	// 每一段独立清空已命中集合，但不结束整个玩家连段生命周期。
+	StartAttack();
+	// 新 Montage 的 BlendIn 会淡出旧段；保留旧姿势用于过渡，并从第 0 秒保留新段前摇。
+	if (PlayMontage(ActiveAttackMontage.Get(), &UZCCombatComponent::HandleAttackMontageEnded, 0.05f))
+	{
+		return true;
+	}
+
+	const bool bHadActiveAttack = FinishAttack();
+	WeaponState = EZCWeaponState::Equipped;
+	ScheduleAutoSheath();
+	bActivePlayerAttackCombo = false;
+	ActiveAttackMontage = nullptr;
+	ResetPlayerAttackCombo();
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
+	}
+	return false;
 }
 
 void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
@@ -302,18 +456,59 @@ void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const boo
 
 void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
-	if (Montage != AttackMontage || WeaponState != EZCWeaponState::Attacking)
+	if (Montage != ActiveAttackMontage.Get() || WeaponState != EZCWeaponState::Attacking)
 	{
 		return;
 	}
 
 	// 无论攻击蒙太奇正常结束还是被打断，都必须关闭残留命中窗口。
 	const bool bHadActiveAttack = FinishAttack();
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
 	WeaponState = EZCWeaponState::Equipped;
 	ScheduleAutoSheath();
+	if (bActivePlayerAttackCombo)
+	{
+		// 完整收招表示连段已经结束；下一次独立攻击从第一段开始。
+		ResetPlayerAttackCombo();
+	}
+	bActivePlayerAttackCombo = false;
+	ActiveAttackMontage = nullptr;
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(bInterrupted);
+	}
+}
+
+void UZCCombatComponent::HandleAttackTraceWindowEnded(UAnimSequenceBase* Animation)
+{
+	// 旧 Montage 淡出时也会收到 NotifyEnd，不能关闭或推进新一段的窗口。
+	if (const UAnimMontage* SourceMontage = Cast<UAnimMontage>(Animation))
+	{
+		if (SourceMontage != ActiveAttackMontage.Get())
+		{
+			return;
+		}
+	}
+	EndTrace();
+	if (!bActivePlayerAttackCombo || !bAttackActive || WeaponState != EZCWeaponState::Attacking)
+	{
+		return;
+	}
+	bPlayerAttackTraceWindowEnded = true;
+	if (bPlayerAttackQueued && GetWorld())
+	{
+		// 离开动画通知派发后再换段，避免 Montage_Play 重入正在处理的 NotifyState。
+		const TWeakObjectPtr<UAnimMontage> ExpectedMontage = ActiveAttackMontage.Get();
+		const int32 ExpectedComboIndex = PlayerAttackComboIndex;
+		GetWorld()->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this,
+			[this, ExpectedMontage, ExpectedComboIndex]()
+			{
+				if (ActiveAttackMontage.Get() == ExpectedMontage.Get() && PlayerAttackComboIndex == ExpectedComboIndex)
+				{
+					ContinuePlayerAttackCombo();
+				}
+			}));
 	}
 }
 
@@ -569,6 +764,11 @@ void UZCCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	// 角色销毁/PIE 停止可能绕过 Montage 回调，必须在组件生命周期边界强制关闭残留 Trace。
 	EndTrace();
 	bAttackActive = false;
+	ActiveAttackMontage = nullptr;
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ResetPlayerAttackCombo();
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	CombatAvailability = EZCCombatAvailability::Disabled;
@@ -603,6 +803,14 @@ bool UZCCombatComponent::InterruptForHitReaction()
 			AnimInstance->Montage_Stop(0.05f);
 		}
 	}
+	if (bActivePlayerAttackCombo)
+	{
+		ResetPlayerAttackCombo();
+	}
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ActiveAttackMontage = nullptr;
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(true);
@@ -647,6 +855,14 @@ void UZCCombatComponent::DisableCombat()
 			AnimInstance->Montage_Stop(0.05f);
 		}
 	}
+	if (bActivePlayerAttackCombo)
+	{
+		ResetPlayerAttackCombo();
+	}
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ActiveAttackMontage = nullptr;
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(true);
@@ -655,10 +871,10 @@ void UZCCombatComponent::DisableCombat()
 
 void UZCCombatComponent::ClearAttackMontageEndDelegate(UAnimInstance* AnimInstance)
 {
-	if (AnimInstance && AttackMontage && AnimInstance->Montage_IsPlaying(AttackMontage))
+	if (AnimInstance && ActiveAttackMontage && AnimInstance->Montage_IsPlaying(ActiveAttackMontage.Get()))
 	{
 		FOnMontageEnded EmptyEndDelegate;
-		AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, AttackMontage);
+		AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, ActiveAttackMontage.Get());
 	}
 }
 

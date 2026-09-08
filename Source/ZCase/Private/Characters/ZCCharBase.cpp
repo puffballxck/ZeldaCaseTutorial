@@ -444,6 +444,13 @@ void AZCCharBase::Move_Triggered(const FInputActionValue& val)
 	const FVector2d InputVector = val.Get<FVector2d>();
 	Vel_X = InputVector.X;
 	Vel_Y = InputVector.Y;
+	if (Combat
+		&& (!FMath::IsNearlyZero(InputVector.X) || !FMath::IsNearlyZero(InputVector.Y))
+		&& (Combat->IsAttackActive() || Combat->GetWeaponState() == EZCWeaponState::Attacking))
+	{
+		// 移动输入立即取消当前攻击，避免攻击蒙太奇与移动同时生效。
+		Combat->CancelAttack();
+	}
 
 	if (Controller == nullptr) return;
     //只关注水平方向Yaw
@@ -736,7 +743,6 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	EIComp->BindAction(ToggleUIAction,ETriggerEvent::Started,this,&AZCCharBase::ToggleUI_Started);
 
 	EIComp->BindAction(ActiveRuneAction,ETriggerEvent::Started,this,&AZCCharBase::ActiveRune_Started);
-	EIComp->BindAction(ReleaseRuneAction,ETriggerEvent::Started,this,&AZCCharBase::ReleaseRune_Started);
 
 	EIComp->BindAction(InteractAction,ETriggerEvent::Started,this,&AZCCharBase::Interact_Started);
 
@@ -749,6 +755,15 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 
 void AZCCharBase::Attack_Started(const FInputActionValue& val)
 {
+	// Left mouse is the single gameplay action: an active rune releases first,
+	// while the inactive state keeps the original Combat attack behavior.
+	if (InteractingActor != nullptr || GetActivatedRune() != ERunes::R_EMAX)
+	{
+		// Keep the existing held-object throw path and rune-specific release logic.
+		ReleaseRune_Started(val);
+		return;
+	}
+
 	if (Combat)
 	{
 		// 角色不直接修改武器状态，避免输入层绕过 Combat 的状态机策略。

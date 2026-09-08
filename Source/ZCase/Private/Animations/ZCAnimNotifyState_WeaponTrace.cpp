@@ -33,7 +33,7 @@ void UZCAnimNotifyState_WeaponTrace::NotifyEnd(
 	AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (UZCCombatComponent* Combat = Owner ? Owner->FindComponentByClass<UZCCombatComponent>() : nullptr)
 	{
-		Combat->EndTrace();
+		Combat->HandleAttackTraceWindowEnded(Animation);
 	}
 }
 
