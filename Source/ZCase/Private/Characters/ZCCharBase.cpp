@@ -142,6 +142,15 @@ void AZCCharBase::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// The independent action is optional until its asset is created and mapped
+	// in IMC_ZC. A BP_Player assignment remains authoritative.
+	if (!InventoryAction)
+	{
+		InventoryAction = LoadObject<UInputAction>(
+			nullptr,
+			TEXT("/Game/_Game/Data/Inputs/IA_Inventory.IA_Inventory"));
+	}
+
 	// 输入接线只对本地玩家生效，但战斗状态仍必须为 AI、服务器和编辑器实例初始化。
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
 	{

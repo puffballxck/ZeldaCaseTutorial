@@ -5,11 +5,16 @@
 
 #include "Characters/ZCCharBase.h"
 #include "Combat/ZCTargetLockComponent.h"
+#include "EnhancedInputComponent.h"
+#include "InputAction.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
+#include "UI/ZCInventoryWidget.h"
+#include "Inventory/ZCInventorySubsystem.h"
 #include "UI/ZCLayout.h"
 #include "UI/ZCTargetLockIndicatorWidget.h"
 #include "UI/ZCHeartHealthWidget.h"
+#include "UObject/UObjectGlobals.h"
 
 void AZCPlayerController::BeginPlay()
 {
@@ -22,6 +27,7 @@ void AZCPlayerController::BeginPlay()
 
 	SetShowMouseCursor(false);
 	SetInputMode(FInputModeGameOnly());
+	BindInventoryInput();
 	RequestPresentationInitialization();
 }
 
@@ -76,6 +82,12 @@ void AZCPlayerController::OnUnPossess()
 	Super::OnUnPossess();
 }
 
+void AZCPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+	BindInventoryInput();
+}
+
 void AZCPlayerController::InitializePlayerPresentation()
 {
 	if (!IsLocalController())
@@ -107,6 +119,11 @@ void AZCPlayerController::InitializePlayerPresentation()
 	}
 
 	PresentedPlayer = PlayerCharacter;
+	if (!InventoryAction)
+	{
+		InventoryAction = PlayerCharacter->InventoryAction;
+	}
+	BindInventoryInput();
 	InitializeTargetLockPresentation(PlayerCharacter);
 	if (!IsValid(HeartHealthWidget))
 	{
@@ -158,6 +175,7 @@ void AZCPlayerController::InitializePlayerPresentation()
 
 	if (!IsValid(RootLayout))
 	{
+		InitializeInventoryPresentation();
 		return;
 	}
 
@@ -170,11 +188,18 @@ void AZCPlayerController::InitializePlayerPresentation()
 	// Keep the pawn reference synchronized for stamina/rune code that still
 	// talks to LayoutRef directly during the staged migration.
 	PlayerCharacter->LayoutRef = RootLayout;
+	InitializeInventoryPresentation();
 	ApplyRuneMenuPolicy();
 }
 
 void AZCPlayerController::SetRuneMenuOpen(const bool bOpen)
 {
+	if (bOpen)
+	{
+		// Rune and inventory panels are mutually exclusive presentation states.
+		bInventoryMenuOpen = false;
+	}
+
 	if (bRuneMenuOpen == bOpen)
 	{
 		// Reapplying is intentional: callers may invoke this before the layout is
@@ -190,6 +215,128 @@ void AZCPlayerController::SetRuneMenuOpen(const bool bOpen)
 void AZCPlayerController::ToggleRuneMenu()
 {
 	SetRuneMenuOpen(!bRuneMenuOpen);
+}
+
+void AZCPlayerController::SetInventoryMenuOpen(const bool bOpen)
+{
+	if (bOpen)
+	{
+		// The two menus share one focus target and one pause lease.
+		bRuneMenuOpen = false;
+	}
+
+	bInventoryMenuOpen = bOpen;
+	if (bOpen)
+	{
+		InitializeInventoryPresentation();
+	}
+	ApplyRuneMenuPolicy();
+}
+
+void AZCPlayerController::ToggleInventoryMenu()
+{
+	SetInventoryMenuOpen(!bInventoryMenuOpen);
+}
+
+void AZCPlayerController::Inventory_Started(const FInputActionValue& Value)
+{
+	ToggleInventoryMenu();
+}
+
+void AZCPlayerController::BindInventoryInput()
+{
+	if (bInventoryInputBound || !InputComponent)
+	{
+		return;
+	}
+
+	if (!InventoryAction)
+	{
+		InventoryAction = LoadObject<UInputAction>(
+			nullptr,
+			TEXT("/Game/_Game/Data/Inputs/IA_Inventory.IA_Inventory"));
+	}
+
+	if (!InventoryAction)
+	{
+		return;
+	}
+
+	if (UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent))
+	{
+		EnhancedInput->BindAction(InventoryAction, ETriggerEvent::Started, this,
+			&AZCPlayerController::Inventory_Started);
+		bInventoryInputBound = true;
+	}
+}
+
+void AZCPlayerController::InitializeInventoryPresentation()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (!IsValid(InventoryWidget))
+	{
+		const TSubclassOf<UZCInventoryWidget> WidgetClass = InventoryWidgetClass
+			? InventoryWidgetClass.Get()
+			: UZCInventoryWidget::StaticClass();
+		InventoryWidget = CreateWidget<UZCInventoryWidget>(this, WidgetClass);
+	}
+
+	if (!IsValid(InventoryWidget))
+	{
+		return;
+	}
+
+	if (!InventoryWidget->IsInViewport())
+	{
+		InventoryWidget->SetVisibility(ESlateVisibility::Collapsed);
+		InventoryWidget->AddToPlayerScreen(40);
+		InventoryWidget->SetAlignmentInViewport(FVector2D::ZeroVector);
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UZCInventorySubsystem* InventorySubsystem = GameInstance->GetSubsystem<UZCInventorySubsystem>())
+		{
+			if (IsValid(InventoryDataTable)
+				&& (!InventorySubsystem->IsInitialized()
+					|| InventorySubsystem->ItemDataTable != InventoryDataTable))
+			{
+				InventorySubsystem->InitializeFromDataTable(InventoryDataTable, InventoryCapacity);
+			}
+
+			InventoryWidget->SetInventorySubsystem(InventorySubsystem);
+			InventorySubsystem->OnInventoryChanged.AddUniqueDynamic(
+				InventoryWidget, &UZCInventoryWidget::RefreshInventory);
+		}
+	}
+
+	InventoryWidget->SetDesiredSizeInViewport(InventoryWidget->GetDesiredInventorySize());
+	InventoryWidget->SetPositionInViewport(InventoryMargin, false);
+	InventoryWidget->SetVisibility(bInventoryMenuOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+}
+
+void AZCPlayerController::ReleaseInventoryPresentation()
+{
+	if (!IsValid(InventoryWidget))
+	{
+		return;
+	}
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UZCInventorySubsystem* InventorySubsystem = GameInstance->GetSubsystem<UZCInventorySubsystem>())
+		{
+			InventorySubsystem->OnInventoryChanged.RemoveDynamic(
+				InventoryWidget, &UZCInventoryWidget::RefreshInventory);
+		}
+	}
+
+	InventoryWidget->RemoveFromParent();
+	InventoryWidget = nullptr;
 }
 
 void AZCPlayerController::RequestPresentationInitialization()
@@ -221,7 +368,14 @@ void AZCPlayerController::ApplyRuneMenuPolicy()
 	{
 		RootLayout->SetRuneMenuOpen(bRuneMenuOpen);
 	}
-	else if (bRuneMenuOpen)
+	if (IsValid(InventoryWidget))
+	{
+		InventoryWidget->SetVisibility(bInventoryMenuOpen
+			? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+
+	const bool bAnyMenuOpen = bRuneMenuOpen || bInventoryMenuOpen;
+	if (bAnyMenuOpen && !IsValid(RootLayout) && !IsValid(InventoryWidget))
 	{
 		// Do not pause before there is a focus target: game-time timers do not
 		// advance while paused, so initialization could otherwise deadlock.
@@ -229,13 +383,17 @@ void AZCPlayerController::ApplyRuneMenuPolicy()
 		return;
 	}
 
-	if (bRuneMenuOpen)
+	if (bAnyMenuOpen)
 	{
 		SetShowMouseCursor(true);
 
 		FInputModeGameAndUI InputMode;
 		InputMode.SetHideCursorDuringCapture(false);
-		if (IsValid(RootLayout))
+		if (bInventoryMenuOpen && IsValid(InventoryWidget))
+		{
+			InputMode.SetWidgetToFocus(InventoryWidget->TakeWidget());
+		}
+		else if (IsValid(RootLayout))
 		{
 			InputMode.SetWidgetToFocus(RootLayout->TakeWidget());
 		}
@@ -243,23 +401,24 @@ void AZCPlayerController::ApplyRuneMenuPolicy()
 
 		if (!UGameplayStatics::IsGamePaused(this))
 		{
-			bPausedByRuneMenu = SetPause(true);
+			bPausedByPresentation = SetPause(true);
 		}
 		return;
 	}
 
 	SetShowMouseCursor(false);
 	SetInputMode(FInputModeGameOnly());
-	if (bPausedByRuneMenu)
+	if (bPausedByPresentation)
 	{
 		SetPause(false);
-		bPausedByRuneMenu = false;
+		bPausedByPresentation = false;
 	}
 }
 
 void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
 {
 	ReleaseTargetLockPresentation(PreviousPlayer);
+	ReleaseInventoryPresentation();
 	if (IsValid(HeartHealthWidget))
 	{
 		HeartHealthWidget->SetAttributes(nullptr);
@@ -267,9 +426,10 @@ void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
 	}
 	HeartHealthWidget = nullptr;
 
-	if (bRuneMenuOpen || bPausedByRuneMenu)
+	if (bRuneMenuOpen || bInventoryMenuOpen || bPausedByPresentation)
 	{
 		bRuneMenuOpen = false;
+		bInventoryMenuOpen = false;
 		ApplyRuneMenuPolicy();
 	}
 

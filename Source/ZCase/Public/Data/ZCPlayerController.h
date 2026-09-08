@@ -3,14 +3,18 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "InputActionValue.h"
 #include "GameFramework/PlayerController.h"
 #include "ZCPlayerController.generated.h"
 
 class AZCCharBase;
+class UDataTable;
+class UInputAction;
 class UZCLayout;
 class UZCTargetLockComponent;
 class UZCTargetLockIndicatorWidget;
 class UZCHeartHealthWidget;
+class UZCInventoryWidget;
 
 /**
  * Owns the local player's presentation state and root HUD lifecycle.
@@ -36,23 +40,41 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Player Presentation")
 	void ToggleRuneMenu();
 
+	/** Opens or closes the inventory and applies the same focus/pause policy as the rune menu. */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Player Presentation")
+	void SetInventoryMenuOpen(bool bOpen);
+
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Player Presentation")
+	void ToggleInventoryMenu();
+
 	UFUNCTION(BlueprintPure, Category = "ZCase|Player Presentation")
 	bool IsRuneMenuOpen() const { return bRuneMenuOpen; }
 
 	UFUNCTION(BlueprintPure, Category = "ZCase|Player Presentation")
 	UZCLayout* GetRootLayout() const { return RootLayout; }
 
+	UFUNCTION(BlueprintPure, Category = "ZCase|Player Presentation")
+	bool IsInventoryMenuOpen() const { return bInventoryMenuOpen; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
+	virtual void SetupInputComponent() override;
 
 private:
 	void RequestPresentationInitialization();
 	void HandleDeferredPresentationInitialization();
 	void ApplyRuneMenuPolicy();
 	void ReleasePlayerPresentation(AZCCharBase* PreviousPlayer);
+	void InitializeInventoryPresentation();
+	void ReleaseInventoryPresentation();
+	void BindInventoryInput();
+
+	UFUNCTION()
+	void Inventory_Started(const FInputActionValue& Value);
+
 	void InitializeTargetLockPresentation(AZCCharBase* PlayerCharacter);
 	void ReleaseTargetLockPresentation(AZCCharBase* PreviousPlayer);
 
@@ -75,6 +97,25 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Health")
 	FVector2D HeartHealthMargin = FVector2D(40.0f, 40.0f);
 
+	/** Optional Blueprint replacement; native widget is used when unset. */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Inventory")
+	TSubclassOf<UZCInventoryWidget> InventoryWidgetClass;
+
+	/** DPI-scaled top-left position for the native/fallback inventory panel. */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Inventory")
+	FVector2D InventoryMargin = FVector2D(40.0f, 180.0f);
+
+	/** Optional FZCItemData table; assigning it initializes the subsystem on first presentation. */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Inventory|Data")
+	TObjectPtr<UDataTable> InventoryDataTable;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Inventory|Data", meta = (ClampMin = "1"))
+	int32 InventoryCapacity = 6;
+
+	/** Independent Enhanced Input action. It may also be assigned on BP_Player; see BindInventoryInput. */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Player Presentation|Inventory|Input")
+	TObjectPtr<UInputAction> InventoryAction;
+
 	/** The one root widget associated with the currently possessed local player. */
 	UPROPERTY(Transient)
 	TObjectPtr<UZCLayout> RootLayout;
@@ -91,16 +132,24 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UZCHeartHealthWidget> HeartHealthWidget;
 
+	/** One controller-owned inventory widget reused across open/close cycles. */
+	UPROPERTY(Transient)
+	TObjectPtr<UZCInventoryWidget> InventoryWidget;
+
 	TWeakObjectPtr<AZCCharBase> BoundTargetLockPlayer;
 	TWeakObjectPtr<UZCTargetLockComponent> BoundTargetLock;
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "ZCase|Player Presentation", meta = (AllowPrivateAccess = "true"))
 	bool bRuneMenuOpen = false;
 
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "ZCase|Player Presentation", meta = (AllowPrivateAccess = "true"))
+	bool bInventoryMenuOpen = false;
+
 	/** True only when this controller was responsible for pausing the game. */
-	bool bPausedByRuneMenu = false;
+	bool bPausedByPresentation = false;
 
 	bool bPresentationInitializationPending = false;
+	bool bInventoryInputBound = false;
 	FTimerHandle PresentationInitializationTimer;
 	
 };

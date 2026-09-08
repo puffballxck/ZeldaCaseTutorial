@@ -115,6 +115,10 @@ public:
 	UPROPERTY(editAnywhere,category="Inputs")
 	UInputAction* ToggleUIAction;
 
+	/** Independent inventory action. The player controller binds it after possession. */
+	UPROPERTY(EditAnywhere, category="Inputs")
+	UInputAction* InventoryAction;
+
 	UPROPERTY(editAnywhere,category="Inputs")
 	UInputAction* ActiveRuneAction;
 
