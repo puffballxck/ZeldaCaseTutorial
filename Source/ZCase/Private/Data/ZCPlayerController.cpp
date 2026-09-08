@@ -134,10 +134,11 @@ void AZCPlayerController::InitializePlayerPresentation()
 	if (IsValid(HeartHealthWidget))
 	{
 		HeartHealthWidget->SetAttributes(PlayerCharacter->Attributes);
+		HeartHealthWidget->SetRuneRuntime(PlayerCharacter->RuneRuntime);
 		if (!HeartHealthWidget->IsInViewport())
 		{
 			HeartHealthWidget->SetVisibility(ESlateVisibility::Hidden);
-			HeartHealthWidget->AddToPlayerScreen(20);
+			HeartHealthWidget->AddToPlayerScreen(5);
 			HeartHealthWidget->SetAlignmentInViewport(FVector2D::ZeroVector);
 			HeartHealthWidget->SetDesiredSizeInViewport(HeartHealthWidget->GetHeartBarSize());
 			HeartHealthWidget->SetPositionInViewport(HeartHealthMargin, false);
@@ -422,6 +423,7 @@ void AZCPlayerController::ReleasePlayerPresentation(AZCCharBase* PreviousPlayer)
 	if (IsValid(HeartHealthWidget))
 	{
 		HeartHealthWidget->SetAttributes(nullptr);
+		HeartHealthWidget->SetRuneRuntime(nullptr);
 		HeartHealthWidget->RemoveFromParent();
 	}
 	HeartHealthWidget = nullptr;

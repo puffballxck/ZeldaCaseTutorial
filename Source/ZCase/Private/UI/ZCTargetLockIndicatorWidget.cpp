@@ -8,7 +8,7 @@
 
 namespace
 {
-	bool IsFiniteVector(const FVector& Value)
+	bool IsFiniteIndicatorVector(const FVector& Value)
 	{
 		return FMath::IsFinite(Value.X) && FMath::IsFinite(Value.Y) && FMath::IsFinite(Value.Z);
 	}
@@ -91,7 +91,7 @@ bool UZCTargetLockIndicatorWidget::UpdateIndicatorPosition()
 	const FVector TargetLocation = Targetable->GetTargetLockLocation();
 	const float SafeHeightOffset = FMath::IsFinite(WorldHeightOffset) ? WorldHeightOffset : 0.0f;
 	const FVector IndicatorLocation = TargetLocation + FVector::UpVector * SafeHeightOffset;
-	if (!IsFiniteVector(TargetLocation) || !IsFiniteVector(IndicatorLocation))
+	if (!IsFiniteIndicatorVector(TargetLocation) || !IsFiniteIndicatorVector(IndicatorLocation))
 	{
 		return false;
 	}

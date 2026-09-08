@@ -8,6 +8,7 @@
 #include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Combat/ZCAttributeComponent.h"
+#include "Gameplay/ZCRuneRuntimeComponent.h"
 #include "Engine/Texture2D.h"
 #include "Math/UnrealMathUtility.h"
 #include "Styling/SlateBrush.h"
@@ -22,10 +23,25 @@ UZCHeartHealthWidget::UZCHeartHealthWidget(const FObjectInitializer& ObjectIniti
 		TEXT("/Game/Assets/Icon/New_Heart/heart_half.heart_half"));
 	static ConstructorHelpers::FObjectFinder<UTexture2D> EmptyHeartTexture(
 		TEXT("/Game/Assets/Icon/New_Heart/heart_empty.heart_empty"));
+	static ConstructorHelpers::FObjectFinder<UTexture2D> RBSTexture(
+		TEXT("/Game/Assets/Icon/New_Runes/bomb_sphere.bomb_sphere"));
+	static ConstructorHelpers::FObjectFinder<UTexture2D> RBBTexture(
+		TEXT("/Game/Assets/Icon/New_Runes/bomb_box.bomb_box"));
+	static ConstructorHelpers::FObjectFinder<UTexture2D> MagTexture(
+		TEXT("/Game/Assets/Icon/New_Runes/mega.mega"));
+	static ConstructorHelpers::FObjectFinder<UTexture2D> StasisTexture(
+		TEXT("/Game/Assets/Icon/New_Runes/timelock.timelock"));
+	static ConstructorHelpers::FObjectFinder<UTexture2D> IceTexture(
+		TEXT("/Game/Assets/Icon/New_Runes/icemaker.icemaker"));
 
 	HeartFullTexture = FullHeartTexture.Object;
 	HeartHalfTexture = HalfHeartTexture.Object;
 	HeartEmptyTexture = EmptyHeartTexture.Object;
+	RuneRBSTexture = RBSTexture.Object;
+	RuneRBBTexture = RBBTexture.Object;
+	RuneMagTexture = MagTexture.Object;
+	RuneStasisTexture = StasisTexture.Object;
+	RuneIceTexture = IceTexture.Object;
 	FlashStates.SetNum(HalfHeartCount);
 }
 
@@ -45,6 +61,19 @@ void UZCHeartHealthWidget::SetAttributes(UZCAttributeComponent* InAttributes)
 	RefreshFromAttributes(false);
 }
 
+void UZCHeartHealthWidget::SetRuneRuntime(UZCRuneRuntimeComponent* InRuneRuntime)
+{
+	if (BoundRuneRuntime != InRuneRuntime)
+	{
+		UnbindFromRuneRuntime();
+		BoundRuneRuntime = InRuneRuntime;
+	}
+
+	BindToRuneRuntime();
+	EnsureWidgetTree();
+	UpdateRuneIcon(BoundRuneRuntime ? BoundRuneRuntime->GetSelectedRune() : ERunes::R_EMAX);
+}
+
 FVector2D UZCHeartHealthWidget::GetHeartBarSize() const
 {
 	const FVector2D SafeHeartSize(FMath::Max(1.0f, HeartSize.X), FMath::Max(1.0f, HeartSize.Y));
@@ -52,13 +81,15 @@ FVector2D UZCHeartHealthWidget::GetHeartBarSize() const
 	const FVector2D SafePadding(FMath::Max(0.0f, HeartBarPadding.X), FMath::Max(0.0f, HeartBarPadding.Y));
 	return FVector2D(
 		SafePadding.X * 2.0f + SafeHeartSize.X * HeartCount + SafeSpacing * (HeartCount - 1),
-		SafePadding.Y * 2.0f + SafeHeartSize.Y);
+		SafePadding.Y * 2.0f + SafeHeartSize.Y + FMath::Max(0.0f, RuneIconGap)
+			+ FMath::Max(1.0f, RuneIconSize.Y));
 }
 
 void UZCHeartHealthWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
 	EnsureWidgetTree();
+	BindToRuneRuntime();
 }
 
 void UZCHeartHealthWidget::NativeConstruct()
@@ -66,13 +97,16 @@ void UZCHeartHealthWidget::NativeConstruct()
 	Super::NativeConstruct();
 	EnsureWidgetTree();
 	BindToAttributes();
+	BindToRuneRuntime();
 	ResetFlashAnimations();
 	RefreshFromAttributes(false);
+	UpdateRuneIcon(BoundRuneRuntime ? BoundRuneRuntime->GetSelectedRune() : ERunes::R_EMAX);
 }
 
 void UZCHeartHealthWidget::NativeDestruct()
 {
 	UnbindFromAttributes();
+	UnbindFromRuneRuntime();
 	ResetFlashAnimations();
 	Super::NativeDestruct();
 }
@@ -85,12 +119,23 @@ void UZCHeartHealthWidget::EnsureWidgetTree()
 	}
 
 	CreateFlashTexture();
-	RootSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("HeartBarSizeBox"));
-	HeartCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("HeartBarCanvas"));
+	const bool bHasBoundRoot = RootSizeBox != nullptr;
+	const bool bHasBoundCanvas = HeartCanvas != nullptr;
+	if (!RootSizeBox)
+	{
+		RootSizeBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("HeartBarSizeBox"));
+	}
+	if (!HeartCanvas)
+	{
+		HeartCanvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("HeartBarCanvas"));
+	}
 	RootSizeBox->SetWidthOverride(GetHeartBarSize().X);
 	RootSizeBox->SetHeightOverride(GetHeartBarSize().Y);
-	RootSizeBox->AddChild(HeartCanvas);
-	WidgetTree->RootWidget = RootSizeBox;
+	if (!bHasBoundRoot || !bHasBoundCanvas)
+	{
+		RootSizeBox->AddChild(HeartCanvas);
+		WidgetTree->RootWidget = RootSizeBox;
+	}
 
 	HeartImages.SetNum(HeartCount);
 	FlashImages.SetNum(HalfHeartCount);
@@ -133,8 +178,33 @@ void UZCHeartHealthWidget::EnsureWidgetTree()
 		FlashSlot->SetSize(FlashSize);
 	}
 
+	const bool bHasBoundRuneIcon = SelectedRuneIcon != nullptr;
+	if (!SelectedRuneIcon)
+	{
+		SelectedRuneIcon = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("SelectedRuneIcon"));
+	}
+	SelectedRuneIcon->SetVisibility(ESlateVisibility::Hidden);
+	SelectedRuneIcon->SetColorAndOpacity(FLinearColor::White);
+	SelectedRuneIcon->SetBrush(MakeRuneIconBrush(nullptr));
+	if (!bHasBoundRuneIcon)
+	{
+		if (UCanvasPanelSlot* RuneSlot = HeartCanvas->AddChildToCanvas(SelectedRuneIcon))
+		{
+			const FVector2D SafeRuneSize(
+				FMath::Max(1.0f, RuneIconSize.X),
+				FMath::Max(1.0f, RuneIconSize.Y));
+			const FVector2D HeartBarSize = GetHeartBarSize();
+			RuneSlot->SetPosition(FVector2D(
+				(HeartBarSize.X - SafeRuneSize.X) * 0.5f,
+				FMath::Max(0.0f, HeartBarPadding.Y) + FMath::Max(1.0f, HeartSize.Y)
+					+ FMath::Max(0.0f, RuneIconGap)));
+			RuneSlot->SetSize(SafeRuneSize);
+		}
+	}
+
 	bWidgetTreeBuilt = true;
 	UpdateHeartImages(DisplayedHalfHearts);
+	UpdateRuneIcon(BoundRuneRuntime ? BoundRuneRuntime->GetSelectedRune() : ERunes::R_EMAX);
 }
 
 void UZCHeartHealthWidget::CreateFlashTexture()
@@ -286,6 +356,24 @@ void UZCHeartHealthWidget::UnbindFromAttributes()
 	}
 }
 
+void UZCHeartHealthWidget::BindToRuneRuntime()
+{
+	if (BoundRuneRuntime)
+	{
+		BoundRuneRuntime->OnSelectedRuneChanged.AddUniqueDynamic(
+			this, &UZCHeartHealthWidget::HandleSelectedRuneChanged);
+	}
+}
+
+void UZCHeartHealthWidget::UnbindFromRuneRuntime()
+{
+	if (BoundRuneRuntime)
+	{
+		BoundRuneRuntime->OnSelectedRuneChanged.RemoveDynamic(
+			this, &UZCHeartHealthWidget::HandleSelectedRuneChanged);
+	}
+}
+
 int32 UZCHeartHealthWidget::CalculateDisplayedHalfHearts(const float Health, const float MaxHealth) const
 {
 	if (!FMath::IsFinite(Health) || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0.0f)
@@ -318,6 +406,51 @@ FSlateBrush UZCHeartHealthWidget::MakeFlashBrush() const
 	return Brush;
 }
 
+FSlateBrush UZCHeartHealthWidget::MakeRuneIconBrush(UTexture2D* Texture) const
+{
+	FSlateBrush Brush;
+	Brush.DrawAs = ESlateBrushDrawType::Image;
+	Brush.SetResourceObject(Texture);
+	Brush.ImageSize = FVector2D(
+		FMath::Max(1.0f, RuneIconSize.X),
+		FMath::Max(1.0f, RuneIconSize.Y));
+	return Brush;
+}
+
+void UZCHeartHealthWidget::UpdateRuneIcon(const ERunes NewRune)
+{
+	if (!SelectedRuneIcon)
+	{
+		return;
+	}
+
+	UTexture2D* RuneTexture = nullptr;
+	switch (NewRune)
+	{
+	case ERunes::R_RBS:
+		RuneTexture = RuneRBSTexture;
+		break;
+	case ERunes::R_RBB:
+		RuneTexture = RuneRBBTexture;
+		break;
+	case ERunes::R_Mag:
+		RuneTexture = RuneMagTexture;
+		break;
+	case ERunes::R_Stasis:
+		RuneTexture = RuneStasisTexture;
+		break;
+	case ERunes::R_Ice:
+		RuneTexture = RuneIceTexture;
+		break;
+	case ERunes::R_EMAX:
+	default:
+		break;
+	}
+
+	SelectedRuneIcon->SetBrush(MakeRuneIconBrush(RuneTexture));
+	SelectedRuneIcon->SetVisibility(RuneTexture ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+}
+
 void UZCHeartHealthWidget::HandleHealthChanged(const float PreviousHealth, const float CurrentHealth)
 {
 	if (!BoundAttributes)
@@ -346,6 +479,11 @@ void UZCHeartHealthWidget::HandleHealthChanged(const float PreviousHealth, const
 	{
 		ResetFlashAnimations();
 	}
+}
+
+void UZCHeartHealthWidget::HandleSelectedRuneChanged(const ERunes PreviousRune, const ERunes CurrentRune)
+{
+	UpdateRuneIcon(CurrentRune);
 }
 
 void UZCHeartHealthWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)

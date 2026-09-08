@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Gameplay/ZCGameplayTypes.h"
 #include "Styling/SlateBrush.h"
 #include "ZCHeartHealthWidget.generated.h"
 
@@ -12,6 +13,7 @@ class UImage;
 class USizeBox;
 class UTexture2D;
 class UZCAttributeComponent;
+class UZCRuneRuntimeComponent;
 
 /** Native three-heart health bar. Each heart represents two half-heart units. */
 UCLASS()
@@ -25,6 +27,10 @@ public:
 	/** Binds this widget to an attribute component and refreshes the bar without a damage flash. */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|UI|Health")
 	void SetAttributes(UZCAttributeComponent* InAttributes);
+
+	/** Binds the always-visible rune icon below the health bar to the player's selection state. */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|UI|Runes")
+	void SetRuneRuntime(UZCRuneRuntimeComponent* InRuneRuntime);
 
 	/** Returns the currently displayed number of half-heart units, from zero through six. */
 	UFUNCTION(BlueprintPure, Category = "ZCase|UI|Health")
@@ -58,6 +64,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ZCase|UI|Health", meta = (ClampMin = "0.0"))
 	float FlashScaleAmount = 0.06f;
 
+	/** Size of the selected-rune icon rendered below the heart row. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ZCase|UI|Runes", meta = (ClampMin = "1.0"))
+	FVector2D RuneIconSize = FVector2D(64.0f, 64.0f);
+
+	/** Gap between the heart row and the selected-rune icon. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ZCase|UI|Runes", meta = (ClampMin = "0.0"))
+	float RuneIconGap = 8.0f;
+
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
@@ -82,17 +96,26 @@ private:
 	void ResetFlashAnimations();
 	void BindToAttributes();
 	void UnbindFromAttributes();
+	void BindToRuneRuntime();
+	void UnbindFromRuneRuntime();
 	int32 CalculateDisplayedHalfHearts(float Health, float MaxHealth) const;
 	FSlateBrush MakeHeartBrush(UTexture2D* Texture) const;
 	FSlateBrush MakeFlashBrush() const;
+	FSlateBrush MakeRuneIconBrush(UTexture2D* Texture) const;
+	void UpdateRuneIcon(ERunes NewRune);
 
 	UFUNCTION()
 	void HandleHealthChanged(float PreviousHealth, float CurrentHealth);
 
-	UPROPERTY(Transient)
+	UFUNCTION()
+	void HandleSelectedRuneChanged(ERunes PreviousRune, ERunes CurrentRune);
+
+	/** Designer-owned root container. WBP_HeartHealth must provide this named widget. */
+	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<USizeBox> RootSizeBox;
 
-	UPROPERTY(Transient)
+	/** Designer-owned canvas used by native health/flash image updates. */
+	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UCanvasPanel> HeartCanvas;
 
 	UPROPERTY(Transient)
@@ -101,8 +124,15 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UImage>> FlashImages;
 
+	/** Designer-owned selected-rune icon; its layout is controlled by WBP_HeartHealth. */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UImage> SelectedRuneIcon;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UZCAttributeComponent> BoundAttributes;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UZCRuneRuntimeComponent> BoundRuneRuntime;
 
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Health")
 	TObjectPtr<UTexture2D> HeartFullTexture;
@@ -112,6 +142,21 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Health")
 	TObjectPtr<UTexture2D> HeartEmptyTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Runes")
+	TObjectPtr<UTexture2D> RuneRBSTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Runes")
+	TObjectPtr<UTexture2D> RuneRBBTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Runes")
+	TObjectPtr<UTexture2D> RuneMagTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Runes")
+	TObjectPtr<UTexture2D> RuneStasisTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|UI|Runes")
+	TObjectPtr<UTexture2D> RuneIceTexture;
 
 	/** One generated soft-light texture reused by all six half-heart overlays. */
 	UPROPERTY(Transient)
