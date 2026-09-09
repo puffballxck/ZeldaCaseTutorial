@@ -10,7 +10,11 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/DamageEvents.h"
+#include "Characters/ZCCharBase.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
@@ -32,6 +36,10 @@ UZCCombatComponent::UZCCombatComponent()
 		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_SheathSword.AM_SheathSword"));
 	SheathSwordMontage = SheathMontageFinder.Object;
 
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> LockedDrawMontageFinder(
+		TEXT("/Game/_Game/Animations/LinkAnim/00_Combat/06_Equip_Build/Sword/AM_Equip_Sword_On_Lockon_Additive.AM_Equip_Sword_On_Lockon_Additive"));
+	DrawSwordOnLockonAdditiveMontage = LockedDrawMontageFinder.Object;
+
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageFinder(
 		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_01.AM_Attack_01"));
 	AttackMontage = AttackMontageFinder.Object;
@@ -47,6 +55,18 @@ UZCCombatComponent::UZCCombatComponent()
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage04Finder(
 		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_04.AM_Attack_04"));
 	AttackMontage04 = AttackMontage04Finder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardHitMontageFinder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Sword_Guard_Hit.AM_Sword_Guard_Hit"));
+	GuardHitMontage = GuardHitMontageFinder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardParryMontageFinder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Sword_Guard_Just.AM_Sword_Guard_Just"));
+	GuardParryMontage = GuardParryMontageFinder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardBreakMontageFinder(
+		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Guard_BreaK.AM_Guard_BreaK"));
+	GuardBreakMontage = GuardBreakMontageFinder.Object;
 }
 
 void UZCCombatComponent::InitializeEquipment(
@@ -65,6 +85,15 @@ void UZCCombatComponent::InitializeEquipment(
 	ResetPlayerAttackCombo();
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	ClearDefenseTimers();
+	ResetGuardBlockCount();
+	ClearDefenseMontageEndDelegate();
+	DefenseState = EZCDefenseState::Normal;
+	bTargetLockActive = false;
+	bGuardSuppressed = false;
+	bParryWindowActive = false;
+	GuardBlockCount = 0;
+	ActiveDrawMontage = nullptr;
 	CharacterMesh = InCharacterMesh;
 	SwordMesh = InSwordMesh;
 	SheathMesh = InSheathMesh;
@@ -91,6 +120,15 @@ void UZCCombatComponent::InitializeAttackSource(
 	ActiveAttackMontage = nullptr;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	ClearDefenseTimers();
+	ResetGuardBlockCount();
+	ClearDefenseMontageEndDelegate();
+	DefenseState = EZCDefenseState::Normal;
+	bTargetLockActive = false;
+	bGuardSuppressed = false;
+	bParryWindowActive = false;
+	GuardBlockCount = 0;
+	ActiveDrawMontage = nullptr;
 	CharacterMesh = InCharacterMesh;
 	TraceSourceMesh = InTraceMesh;
 	// NAME_None means keep the component's editable defaults. This lets the
@@ -169,7 +207,7 @@ EZCWeaponCommand UZCCombatComponent::ResolveAttackCommand(const EZCWeaponState S
 
 bool UZCCombatComponent::HandleAttackInput()
 {
-	if (!CanAcceptCombatInput())
+	if (!CanAcceptCombatInput() || IsGuardBroken())
 	{
 		return false;
 	}
@@ -198,10 +236,562 @@ bool UZCCombatComponent::HandleAttackInput()
 	}
 }
 
+bool UZCCombatComponent::HandleGuardInput()
+{
+	if (!CanAcceptCombatInput() || IsGuardBroken() || bGuardSuppressed || !bTargetLockActive)
+	{
+		return false;
+	}
+
+	// The Started event is intentionally edge-triggered: while target-lock
+	// guard is active it opens one finite parry attempt instead of replaying a
+	// held montage every frame. A guard hit can enter the same path from BlockHit.
+	if (DefenseState == EZCDefenseState::Guarding || DefenseState == EZCDefenseState::BlockHit)
+	{
+		return StartParry();
+	}
+
+	if (DefenseState == EZCDefenseState::Parrying)
+	{
+		return false;
+	}
+
+	EnsureGuardState();
+	return DefenseState == EZCDefenseState::Guarding && StartParry();
+}
+
+void UZCCombatComponent::SetTargetLockActive(const bool bInTargetLockActive)
+{
+	if (bTargetLockActive == bInTargetLockActive)
+	{
+		if (bInTargetLockActive)
+		{
+			EnsureGuardState();
+		}
+		return;
+	}
+
+	bTargetLockActive = bInTargetLockActive;
+	if (!bTargetLockActive)
+	{
+		// Unlock is an authoritative exit for the automatic guard path.
+		ExitGuard(true);
+		if (WeaponState == EZCWeaponState::Equipped)
+		{
+			ScheduleAutoSheath();
+		}
+		return;
+	}
+
+	EnsureGuardState();
+}
+
+void UZCCombatComponent::SetGuardSuppressed(const bool bInGuardSuppressed)
+{
+	if (bGuardSuppressed == bInGuardSuppressed)
+	{
+		if (!bInGuardSuppressed)
+		{
+			EnsureGuardState();
+		}
+		return;
+	}
+
+	bGuardSuppressed = bInGuardSuppressed;
+	if (bGuardSuppressed)
+	{
+		if (DefenseState != EZCDefenseState::Broken)
+		{
+			ClearDefenseTimers();
+			StopDefenseMontage();
+			DefenseState = EZCDefenseState::Normal;
+		}
+		return;
+	}
+
+	EnsureGuardState();
+}
+
+bool UZCCombatComponent::IsGuardPoseActive() const
+{
+	return IsGuardDesired() && CanEnterGuard() && (DefenseState == EZCDefenseState::Guarding
+		|| DefenseState == EZCDefenseState::BlockHit
+		|| DefenseState == EZCDefenseState::Parrying);
+}
+
+bool UZCCombatComponent::IsGuardDesired() const
+{
+	return bTargetLockActive;
+}
+
+bool UZCCombatComponent::CanEnterGuard() const
+{
+	const AZCCharBase* Player = Cast<AZCCharBase>(GetOwner());
+	return CanAcceptCombatInput()
+		&& Player && Player->CanMaintainGuard()
+		&& !bGuardSuppressed
+		&& !IsGuardBroken()
+		&& !bAttackActive
+		&& WeaponState == EZCWeaponState::Equipped
+		&& CharacterMesh != nullptr;
+}
+
+bool UZCCombatComponent::StartGuard()
+{
+	if (!IsGuardDesired() || !CanEnterGuard())
+	{
+		return false;
+	}
+
+	ClearAutoSheathTimer();
+	if (DefenseState == EZCDefenseState::Guarding
+		|| DefenseState == EZCDefenseState::BlockHit
+		|| DefenseState == EZCDefenseState::Parrying)
+	{
+		return true;
+	}
+
+	DefenseState = EZCDefenseState::Guarding;
+	return true;
+}
+
+void UZCCombatComponent::EnsureGuardState()
+{
+	if (!IsGuardDesired() || !CanAcceptCombatInput() || bGuardSuppressed || IsGuardBroken())
+	{
+		return;
+	}
+
+	if (WeaponState == EZCWeaponState::Equipped)
+	{
+		StartGuard();
+	}
+}
+
+void UZCCombatComponent::ExitGuard(const bool bClearRequests)
+{
+	if (bClearRequests)
+	{
+		bTargetLockActive = false;
+	}
+
+	const bool bWasBroken = DefenseState == EZCDefenseState::Broken;
+	if (!bWasBroken)
+	{
+		ClearDefenseTimers();
+		StopDefenseMontage();
+		DefenseState = EZCDefenseState::Normal;
+	}
+	ResetGuardBlockCount();
+
+	if (!IsGuardDesired() && WeaponState == EZCWeaponState::Equipped)
+	{
+		ScheduleAutoSheath();
+	}
+}
+
+bool UZCCombatComponent::StartParry()
+{
+	if (!IsGuardDesired() || !CanEnterGuard() || DefenseState == EZCDefenseState::Parrying)
+	{
+		return false;
+	}
+
+	ClearDefenseTimers();
+	StopDefenseMontage();
+	DefenseState = EZCDefenseState::Parrying;
+	bParryWindowActive = false;
+
+	if (!GuardParryMontage || !StartDefenseMontage(GuardParryMontage, EZCDefenseState::Parrying))
+	{
+		// A missing optional asset cannot leave the character locked in Parrying.
+		DefenseState = EZCDefenseState::Guarding;
+		return false;
+	}
+
+	const float MontageLength = GuardParryMontage->GetPlayLength();
+	const float SafeStart = FMath::Clamp(
+		FMath::IsFinite(ParryWindowStartTime) ? ParryWindowStartTime : 0.0f,
+		0.0f,
+		MontageLength);
+	const float SafeEnd = FMath::Clamp(
+		FMath::IsFinite(ParryWindowEndTime) ? ParryWindowEndTime : 0.0f,
+		SafeStart,
+		MontageLength);
+	const uint32 ExpectedGeneration = ++ParryWindowGeneration;
+
+	if (SafeEnd > SafeStart && GetWorld())
+	{
+		if (SafeStart <= 0.0f)
+		{
+			HandleParryWindowStart(ExpectedGeneration);
+		}
+		else
+		{
+			GetWorld()->GetTimerManager().SetTimer(
+				ParryWindowStartTimerHandle,
+				FTimerDelegate::CreateWeakLambda(this,
+					[this, ExpectedGeneration]()
+					{
+						HandleParryWindowStart(ExpectedGeneration);
+					}),
+				SafeStart,
+				false);
+		}
+
+		GetWorld()->GetTimerManager().SetTimer(
+			ParryWindowEndTimerHandle,
+			FTimerDelegate::CreateWeakLambda(this,
+				[this, ExpectedGeneration]()
+				{
+					HandleParryWindowEnd(ExpectedGeneration);
+				}),
+			SafeEnd,
+			false);
+	}
+
+	return true;
+}
+
+bool UZCCombatComponent::StartDefenseMontage(
+	UAnimMontage* Montage,
+	const EZCDefenseState MontageState)
+{
+	if (CombatAvailability != EZCCombatAvailability::Enabled || !CharacterMesh || !Montage)
+	{
+		return false;
+	}
+
+	UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance();
+	if (!AnimInstance)
+	{
+		return false;
+	}
+
+	UAnimMontage* PreviousMontage = ActiveDefenseMontage.Get();
+	if (PreviousMontage && AnimInstance->Montage_IsPlaying(PreviousMontage))
+	{
+		ClearDefenseMontageEndDelegate();
+		AnimInstance->Montage_Stop(0.05f, PreviousMontage);
+	}
+
+	const float PlayLength = AnimInstance->Montage_Play(Montage);
+	if (PlayLength <= 0.0f)
+	{
+		return false;
+	}
+
+	ActiveDefenseMontage = Montage;
+	const uint32 ExpectedGeneration = ++DefenseMontageGeneration;
+	FOnMontageEnded EndDelegate;
+	EndDelegate.BindWeakLambda(this,
+		[this, ExpectedGeneration, MontageState](UAnimMontage* EndedMontage, const bool bInterrupted)
+		{
+			if (DefenseState == MontageState)
+			{
+				HandleDefenseMontageEnded(EndedMontage, bInterrupted, ExpectedGeneration);
+			}
+		});
+	AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
+	return true;
+}
+
+void UZCCombatComponent::HandleDefenseMontageEnded(
+	UAnimMontage* Montage,
+	const bool bInterrupted,
+	const uint32 Generation)
+{
+	if (Generation != DefenseMontageGeneration || Montage != ActiveDefenseMontage.Get())
+	{
+		return;
+	}
+
+	ActiveDefenseMontage = nullptr;
+	ClearDefenseTimers();
+	bParryWindowActive = false;
+
+	if (DefenseState == EZCDefenseState::Broken)
+	{
+		GuardBlockCount = 0;
+		DefenseState = EZCDefenseState::Normal;
+		EnsureGuardState();
+		ScheduleAutoSheath();
+		return;
+	}
+
+	if (DefenseState == EZCDefenseState::BlockHit || DefenseState == EZCDefenseState::Parrying)
+	{
+		DefenseState = EZCDefenseState::Normal;
+		EnsureGuardState();
+		if (DefenseState == EZCDefenseState::Normal && WeaponState == EZCWeaponState::Equipped)
+		{
+			ScheduleAutoSheath();
+		}
+	}
+}
+
+void UZCCombatComponent::ClearDefenseMontageEndDelegate()
+{
+	if (CharacterMesh && ActiveDefenseMontage)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			FOnMontageEnded EmptyEndDelegate;
+			AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, ActiveDefenseMontage.Get());
+		}
+	}
+
+	ActiveDefenseMontage = nullptr;
+	++DefenseMontageGeneration;
+}
+
+void UZCCombatComponent::StopDefenseMontage()
+{
+	UAnimMontage* MontageToStop = ActiveDefenseMontage.Get();
+	UAnimInstance* AnimInstance = CharacterMesh ? CharacterMesh->GetAnimInstance() : nullptr;
+	const bool bMontagePlaying = MontageToStop && AnimInstance && AnimInstance->Montage_IsPlaying(MontageToStop);
+	ClearDefenseMontageEndDelegate();
+	if (bMontagePlaying)
+	{
+		AnimInstance->Montage_Stop(0.05f, MontageToStop);
+	}
+}
+
+void UZCCombatComponent::HandleBlockHit()
+{
+	if (!CanEnterGuard())
+	{
+		return;
+	}
+
+	if (GuardBlockResetTime <= 0.0f)
+	{
+		GuardBlockCount = 0;
+	}
+	GuardBlockCount = FMath::Max(0, GuardBlockCount) + 1;
+	if (GetWorld())
+	{
+		if (GuardBlockResetTime > 0.0f)
+		{
+			GetWorld()->GetTimerManager().SetTimer(
+				GuardBlockResetTimerHandle,
+				this,
+				&UZCCombatComponent::ResetGuardBlockCount,
+				GuardBlockResetTime,
+				false);
+		}
+		else
+		{
+			GetWorld()->GetTimerManager().ClearTimer(GuardBlockResetTimerHandle);
+		}
+	}
+
+	if (GuardBlockCount >= FMath::Max(1, GuardBlocksToBreak))
+	{
+		EnterGuardBroken();
+		return;
+	}
+
+	ClearDefenseTimers();
+	bParryWindowActive = false;
+	if (DefenseState == EZCDefenseState::BlockHit
+		&& ActiveDefenseMontage == GuardHitMontage)
+	{
+		return;
+	}
+
+	StopDefenseMontage();
+	DefenseState = EZCDefenseState::BlockHit;
+	if (!GuardHitMontage || !StartDefenseMontage(GuardHitMontage, EZCDefenseState::BlockHit))
+	{
+		DefenseState = EZCDefenseState::Guarding;
+	}
+}
+
+void UZCCombatComponent::EnterGuardBroken()
+{
+	if (CombatAvailability == EZCCombatAvailability::Disabled)
+	{
+		return;
+	}
+
+	ClearDefenseTimers();
+	StopDefenseMontage();
+	bParryWindowActive = false;
+	ResetGuardBlockCount();
+	DefenseState = EZCDefenseState::Broken;
+
+	if (ACharacter* Character = Cast<ACharacter>(GetOwner()))
+	{
+		Character->StopJumping();
+		Character->ConsumeMovementInputVector();
+		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+		{
+			Movement->StopMovementImmediately();
+		}
+	}
+
+	if (GuardBreakMontage && StartDefenseMontage(GuardBreakMontage, EZCDefenseState::Broken))
+	{
+		return;
+	}
+
+	const uint32 ExpectedGeneration = ++DefenseMontageGeneration;
+	if (GetWorld() && GuardBreakRecoveryDuration > 0.0f)
+	{
+		GetWorld()->GetTimerManager().SetTimer(
+			GuardBreakFallbackTimerHandle,
+			FTimerDelegate::CreateWeakLambda(this,
+				[this, ExpectedGeneration]()
+				{
+					HandleGuardBreakFallbackElapsed(ExpectedGeneration);
+				}),
+			GuardBreakRecoveryDuration,
+			false);
+	}
+	else
+	{
+		HandleGuardBreakFallbackElapsed(ExpectedGeneration);
+	}
+}
+
+void UZCCombatComponent::ResetGuardBlockCount()
+{
+	GuardBlockCount = 0;
+	if (GetWorld())
+	{
+		GetWorld()->GetTimerManager().ClearTimer(GuardBlockResetTimerHandle);
+	}
+}
+
+void UZCCombatComponent::HandleParryWindowStart(const uint32 Generation)
+{
+	if (Generation == ParryWindowGeneration
+		&& DefenseState == EZCDefenseState::Parrying
+		&& ActiveDefenseMontage == GuardParryMontage)
+	{
+		bParryWindowActive = true;
+	}
+}
+
+void UZCCombatComponent::HandleParryWindowEnd(const uint32 Generation)
+{
+	if (Generation == ParryWindowGeneration && DefenseState == EZCDefenseState::Parrying)
+	{
+		bParryWindowActive = false;
+	}
+}
+
+void UZCCombatComponent::HandleGuardBreakFallbackElapsed(const uint32 Generation)
+{
+	if (Generation != DefenseMontageGeneration || DefenseState != EZCDefenseState::Broken)
+	{
+		return;
+	}
+
+	DefenseState = EZCDefenseState::Normal;
+	EnsureGuardState();
+	if (DefenseState == EZCDefenseState::Normal && WeaponState == EZCWeaponState::Equipped)
+	{
+		ScheduleAutoSheath();
+	}
+}
+
+void UZCCombatComponent::ClearDefenseTimers()
+{
+	if (GetWorld())
+	{
+		FTimerManager& TimerManager = GetWorld()->GetTimerManager();
+		TimerManager.ClearTimer(ParryWindowStartTimerHandle);
+		TimerManager.ClearTimer(ParryWindowEndTimerHandle);
+		TimerManager.ClearTimer(GuardBreakFallbackTimerHandle);
+	}
+	++ParryWindowGeneration;
+	bParryWindowActive = false;
+}
+
+bool UZCCombatComponent::IsDamageFromFront(
+	const FDamageEvent& DamageEvent,
+	AActor* DamageCauser) const
+{
+	const AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
+
+	const FVector OwnerLocation = Owner->GetActorLocation();
+	FVector ToAttacker = DamageCauser
+		? DamageCauser->GetActorLocation() - OwnerLocation
+		: FVector::ZeroVector;
+
+	if (ToAttacker.SizeSquared2D() <= FMath::Square(KINDA_SMALL_NUMBER)
+		&& DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+	{
+		const FPointDamageEvent& PointDamage = static_cast<const FPointDamageEvent&>(DamageEvent);
+		ToAttacker = -PointDamage.ShotDirection;
+	}
+
+	const FVector Forward = Owner->GetActorForwardVector().GetSafeNormal2D();
+	const FVector HorizontalAttacker = ToAttacker.GetSafeNormal2D();
+	if (Forward.IsNearlyZero() || HorizontalAttacker.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const float SafeHalfAngle = FMath::Clamp(
+		FMath::IsFinite(GuardFrontHalfAngleDegrees) ? GuardFrontHalfAngleDegrees : 90.0f,
+		0.0f,
+		180.0f);
+	const float RequiredDot = FMath::Cos(FMath::DegreesToRadians(SafeHalfAngle));
+	return FVector::DotProduct(Forward, HorizontalAttacker) >= RequiredDot;
+}
+
+EZCDefenseHitResult UZCCombatComponent::ResolveIncomingDamage(
+	const FDamageEvent& DamageEvent,
+	AActor* DamageCauser)
+{
+	if (DefenseState == EZCDefenseState::Broken)
+	{
+		// Broken is a damage vulnerability state; the caller applies ordinary
+		// health damage but suppresses a second hit-react over the break pose.
+		return EZCDefenseHitResult::DamageThroughBroken;
+	}
+
+	if (!IsGuardDesired() || !CanEnterGuard()
+		|| !IsDamageFromFront(DamageEvent, DamageCauser))
+	{
+		return EZCDefenseHitResult::None;
+	}
+
+	if (DefenseState == EZCDefenseState::Parrying && bParryWindowActive)
+	{
+		bParryWindowActive = false;
+		if (GetWorld())
+		{
+			GetWorld()->GetTimerManager().ClearTimer(ParryWindowStartTimerHandle);
+			GetWorld()->GetTimerManager().ClearTimer(ParryWindowEndTimerHandle);
+		}
+		return EZCDefenseHitResult::Parried;
+	}
+
+	if (DefenseState == EZCDefenseState::Guarding
+		|| DefenseState == EZCDefenseState::BlockHit
+		|| DefenseState == EZCDefenseState::Parrying)
+	{
+		HandleBlockHit();
+		return DefenseState == EZCDefenseState::Broken
+			? EZCDefenseHitResult::GuardBroken
+			: EZCDefenseHitResult::Blocked;
+	}
+
+	return EZCDefenseHitResult::None;
+}
+
 bool UZCCombatComponent::TryAttack()
 {
 	// AI 入口不要求武器状态为 Equipped，但仍共享同一战斗可用性和攻击生命周期。
-	if (!CanAcceptCombatInput() || bAttackActive || WeaponState == EZCWeaponState::Attacking
+	if (!CanAcceptCombatInput() || IsGuardBroken() || bAttackActive || WeaponState == EZCWeaponState::Attacking
 		|| !CharacterMesh || !AttackMontage)
 	{
 		return false;
@@ -244,6 +834,7 @@ void UZCCombatComponent::CancelAttack()
 	}
 	bActivePlayerAttackCombo = false;
 	ActiveAttackMontage = nullptr;
+	SetGuardSuppressed(false);
 
 	if (bHadActiveAttack)
 	{
@@ -258,19 +849,32 @@ bool UZCCombatComponent::StartDraw()
 		return false;
 	}
 
+	// A lock-on draw uses the additive montage on WeaponAdditive when the
+	// optional asset is available. Ordinary unlocked draws retain the legacy
+	// montage and both paths share the same attachment timing.
+	UAnimMontage* RequestedDrawMontage = bTargetLockActive && DrawSwordOnLockonAdditiveMontage
+		? DrawSwordOnLockonAdditiveMontage.Get()
+		: DrawSwordMontage.Get();
+	if (!RequestedDrawMontage)
+	{
+		return false;
+	}
+
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	ActiveDrawMontage = RequestedDrawMontage;
 	// 只有拔刀蒙太奇完成或被打断，才能离开 Drawing 状态。
 	WeaponState = EZCWeaponState::Drawing;
-	if (PlayMontage(DrawSwordMontage, &UZCCombatComponent::HandleDrawMontageEnded))
+	if (PlayMontage(ActiveDrawMontage.Get(), &UZCCombatComponent::HandleDrawMontageEnded))
 	{
 		ScheduleAttachmentSwitch(
 			EZCWeaponAttachmentState::Equipped,
-			DrawSwordMontage,
+			ActiveDrawMontage.Get(),
 			DrawAttachmentNormalizedTime);
 		return true;
 	}
 
+	ActiveDrawMontage = nullptr;
 	WeaponState = EZCWeaponState::Sheathed;
 	return false;
 }
@@ -282,6 +886,7 @@ bool UZCCombatComponent::StartWeaponAttack(UAnimMontage* Montage, const bool bUs
 		return false;
 	}
 
+	SetGuardSuppressed(true);
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	WeaponState = EZCWeaponState::Attacking;
@@ -307,6 +912,7 @@ bool UZCCombatComponent::StartWeaponAttack(UAnimMontage* Montage, const bool bUs
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;
 	ActiveAttackMontage = nullptr;
+	SetGuardSuppressed(false);
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(true);
@@ -328,6 +934,7 @@ bool UZCCombatComponent::RequestSheath()
 	ResetPlayerAttackCombo();
 	// 只允许从稳定的 Equipped 状态进入收刀，避免与其他过渡竞争挂点。
 	WeaponState = EZCWeaponState::Sheathing;
+	ExitGuard(false);
 	if (PlayMontage(SheathSwordMontage, &UZCCombatComponent::HandleSheathMontageEnded))
 	{
 		ScheduleAttachmentSwitch(
@@ -425,6 +1032,7 @@ bool UZCCombatComponent::ContinuePlayerAttackCombo()
 	ScheduleAutoSheath();
 	bActivePlayerAttackCombo = false;
 	ActiveAttackMontage = nullptr;
+	SetGuardSuppressed(false);
 	ResetPlayerAttackCombo();
 	if (bHadActiveAttack)
 	{
@@ -435,11 +1043,13 @@ bool UZCCombatComponent::ContinuePlayerAttackCombo()
 
 void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
 {
-	if (Montage != DrawSwordMontage || WeaponState != EZCWeaponState::Drawing)
+	if (Montage != ActiveDrawMontage.Get() || WeaponState != EZCWeaponState::Drawing)
 	{
 		return;
 	}
+
 	ClearAttachmentTimer();
+	ActiveDrawMontage = nullptr;
 
 	if (bInterrupted)
 	{
@@ -451,7 +1061,27 @@ void UZCCombatComponent::HandleDrawMontageEnded(UAnimMontage* Montage, const boo
 
 	SetEquipmentAttachmentState(EZCWeaponAttachmentState::Equipped);
 	WeaponState = EZCWeaponState::Equipped;
-	ScheduleAutoSheath();
+	if (IsGuardDesired())
+	{
+		StartGuard();
+	}
+	else
+	{
+		ScheduleAutoSheath();
+	}
+}
+
+void UZCCombatComponent::ClearDrawMontageEndDelegate()
+{
+	if (CharacterMesh && ActiveDrawMontage)
+	{
+		if (UAnimInstance* AnimInstance = CharacterMesh->GetAnimInstance())
+		{
+			FOnMontageEnded EmptyEndDelegate;
+			AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, ActiveDrawMontage.Get());
+		}
+	}
+	ActiveDrawMontage = nullptr;
 }
 
 void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const bool bInterrupted)
@@ -466,7 +1096,6 @@ void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const b
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;
 	WeaponState = EZCWeaponState::Equipped;
-	ScheduleAutoSheath();
 	if (bActivePlayerAttackCombo)
 	{
 		// 完整收招表示连段已经结束；下一次独立攻击从第一段开始。
@@ -474,6 +1103,8 @@ void UZCCombatComponent::HandleAttackMontageEnded(UAnimMontage* Montage, const b
 	}
 	bActivePlayerAttackCombo = false;
 	ActiveAttackMontage = nullptr;
+	SetGuardSuppressed(false);
+	ScheduleAutoSheath();
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(bInterrupted);
@@ -540,7 +1171,11 @@ void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentSt
 	{
 		return;
 	}
+	ApplyEquipmentAttachmentState(AttachmentState);
+}
 
+void UZCCombatComponent::ApplyEquipmentAttachmentState(const EZCWeaponAttachmentState AttachmentState)
+{
 	if (GetWorld()
 		&& GetWorld()->GetTimerManager().IsTimerActive(AttachmentTimerHandle)
 		&& PendingAttachmentState == AttachmentState)
@@ -682,7 +1317,8 @@ bool UZCCombatComponent::IsWeaponEquippedForAnimation() const
 
 void UZCCombatComponent::ScheduleAutoSheath()
 {
-	if (!CanAcceptCombatInput() || WeaponState != EZCWeaponState::Equipped || !SwordMesh
+	if (!CanAcceptCombatInput() || IsGuardDesired() || IsGuardPoseActive()
+		|| WeaponState != EZCWeaponState::Equipped || !SwordMesh
 		|| AutoSheathDelay <= 0.0f || !GetWorld())
 	{
 		return;
@@ -706,7 +1342,8 @@ void UZCCombatComponent::ClearAutoSheathTimer()
 
 void UZCCombatComponent::HandleAutoSheathElapsed()
 {
-	if (CanAcceptCombatInput() && WeaponState == EZCWeaponState::Equipped)
+	if (CanAcceptCombatInput() && !IsGuardDesired() && !IsGuardPoseActive()
+		&& WeaponState == EZCWeaponState::Equipped)
 	{
 		// 只从稳定的 Equipped 状态触发自动收刀，过渡期间的旧 Timer 无效。
 		RequestSheath();
@@ -761,17 +1398,24 @@ void UZCCombatComponent::EndTrace()
 
 void UZCCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CombatAvailability = EZCCombatAvailability::Disabled;
 	// 角色销毁/PIE 停止可能绕过 Montage 回调，必须在组件生命周期边界强制关闭残留 Trace。
 	EndTrace();
 	bAttackActive = false;
+	ClearDrawMontageEndDelegate();
 	ActiveAttackMontage = nullptr;
+	StopDefenseMontage();
+	ClearDefenseTimers();
+	ResetGuardBlockCount();
+	DefenseState = EZCDefenseState::Normal;
+	bTargetLockActive = false;
+	bGuardSuppressed = false;
 	bActivePlayerAttackCombo = false;
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;
 	ResetPlayerAttackCombo();
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
-	CombatAvailability = EZCCombatAvailability::Disabled;
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -791,7 +1435,12 @@ bool UZCCombatComponent::InterruptForHitReaction()
 	CombatAvailability = EZCCombatAvailability::Reacting;
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	const bool bWasDrawing = WeaponState == EZCWeaponState::Drawing;
+	const EZCWeaponAttachmentState PreviousAttachmentState = AnimationAttachmentState;
 	const bool bHadActiveAttack = FinishAttack();
+	ClearDrawMontageEndDelegate();
+	StopDefenseMontage();
+	DefenseState = EZCDefenseState::Normal;
 	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
 		? EZCWeaponState::Equipped
 		: EZCWeaponState::Sheathed;
@@ -803,6 +1452,15 @@ bool UZCCombatComponent::InterruptForHitReaction()
 			AnimInstance->Montage_Stop(0.05f);
 		}
 	}
+	if (bWasDrawing)
+	{
+		ApplyEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
+		WeaponState = EZCWeaponState::Sheathed;
+	}
+	else if (PreviousAttachmentState == EZCWeaponAttachmentState::Equipped)
+	{
+		ApplyEquipmentAttachmentState(EZCWeaponAttachmentState::Equipped);
+	}
 	if (bActivePlayerAttackCombo)
 	{
 		ResetPlayerAttackCombo();
@@ -811,6 +1469,7 @@ bool UZCCombatComponent::InterruptForHitReaction()
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;
 	ActiveAttackMontage = nullptr;
+	bGuardSuppressed = false;
 	if (bHadActiveAttack)
 	{
 		OnAttackEnded.Broadcast(true);
@@ -826,7 +1485,11 @@ void UZCCombatComponent::ResumeAfterHitReaction()
 	}
 
 	CombatAvailability = EZCCombatAvailability::Enabled;
-	if (WeaponState == EZCWeaponState::Equipped)
+	if (IsGuardDesired() && WeaponState == EZCWeaponState::Equipped)
+	{
+		StartGuard();
+	}
+	else if (WeaponState == EZCWeaponState::Equipped)
 	{
 		ScheduleAutoSheath();
 	}
@@ -844,6 +1507,13 @@ void UZCCombatComponent::DisableCombat()
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
 	const bool bHadActiveAttack = FinishAttack();
+	ClearDrawMontageEndDelegate();
+	StopDefenseMontage();
+	ClearDefenseTimers();
+	ResetGuardBlockCount();
+	DefenseState = EZCDefenseState::Normal;
+	bTargetLockActive = false;
+	bGuardSuppressed = false;
 	WeaponState = AnimationAttachmentState == EZCWeaponAttachmentState::Equipped
 		? EZCWeaponState::Equipped
 		: EZCWeaponState::Sheathed;

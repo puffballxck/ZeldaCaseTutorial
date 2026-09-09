@@ -14,6 +14,7 @@ class UMeshComponent;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
 struct FActorComponentTickFunction;
+struct FDamageEvent;
 
 UENUM(BlueprintType)
 enum class EZCCombatAvailability : uint8
@@ -24,6 +25,28 @@ enum class EZCCombatAvailability : uint8
 	Reacting,
 	/** 死亡后的终止状态；陈旧回调不能再次启用战斗。 */
 	Disabled
+};
+
+/** 独立于武器挂点的防御状态；挂剑不等于免伤。 */
+UENUM(BlueprintType)
+enum class EZCDefenseState : uint8
+{
+	Normal,
+	Guarding,
+	BlockHit,
+	Parrying,
+	Broken
+};
+
+/** 角色收到伤害前的防御判定结果。 */
+UENUM(BlueprintType)
+enum class EZCDefenseHitResult : uint8
+{
+	None,
+	Blocked,
+	Parried,
+	GuardBroken,
+	DamageThroughBroken
 };
 
 /** 一次攻击接触完成伤害结算后提供给表现层的稳定结果。 */
@@ -165,6 +188,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Weapon")
 	bool HandleAttackInput();
 
+	/** 由 IA_Guard Started 调用；目标锁定守卫中尝试一次有限窗口招架。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Defense")
+	bool HandleGuardInput();
+
+	/** 通知组件当前是否存在有效目标锁定；锁定时装备好的剑会自动进入守卫。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Defense")
+	void SetTargetLockActive(bool bInTargetLockActive);
+
+	/** 暂停守卫表现但保留目标锁定意图，便于动作结束后恢复。 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Defense")
+	void SetGuardSuppressed(bool bInGuardSuppressed);
+
+	/** 在 CharBase 扣血前调用；只处理正面守卫、招架、破防和破防期间的普通伤害。 */
+	EZCDefenseHitResult ResolveIncomingDamage(const FDamageEvent& DamageEvent, AActor* DamageCauser);
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat|Defense")
+	EZCDefenseState GetDefenseState() const { return DefenseState; }
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat|Defense")
+	bool IsGuardPoseActive() const;
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat|Defense")
+	bool IsGuardBroken() const { return DefenseState == EZCDefenseState::Broken; }
+
 	/** 仅在武器已装备时请求收刀。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Weapon")
 	bool RequestSheath();
@@ -183,7 +230,7 @@ public:
 
 	/** 返回战斗动作当前是否可用。 */
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
-	bool CanAcceptCombatInput() const { return CombatAvailability == EZCCombatAvailability::Enabled; }
+	bool CanAcceptCombatInput() const { return CombatAvailability == EZCCombatAvailability::Enabled && !IsGuardBroken(); }
 
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
 	EZCCombatAvailability GetCombatAvailability() const { return CombatAvailability; }
@@ -264,6 +311,24 @@ private:
 	bool GetTraceSocketLocations(FVector& OutBase, FVector& OutTip);
 	void DisableTraceTick();
 	bool StartDraw();
+	bool StartGuard();
+	void ExitGuard(bool bClearRequests);
+	bool StartParry();
+	bool StartDefenseMontage(UAnimMontage* Montage, EZCDefenseState MontageState);
+	void HandleDefenseMontageEnded(UAnimMontage* Montage, bool bInterrupted, uint32 Generation);
+	void StopDefenseMontage();
+	void ClearDefenseMontageEndDelegate();
+	void HandleBlockHit();
+	void EnterGuardBroken();
+	void ResetGuardBlockCount();
+	void HandleParryWindowStart(uint32 Generation);
+	void HandleParryWindowEnd(uint32 Generation);
+	void HandleGuardBreakFallbackElapsed(uint32 Generation);
+	void ClearDefenseTimers();
+	void EnsureGuardState();
+	bool IsGuardDesired() const;
+	bool CanEnterGuard() const;
+	bool IsDamageFromFront(const FDamageEvent& DamageEvent, AActor* DamageCauser) const;
 	bool StartWeaponAttack(UAnimMontage* Montage, bool bUsePlayerCombo);
 	bool ContinuePlayerAttackCombo();
 	UAnimMontage* ResolvePlayerAttackMontage() const;
@@ -274,6 +339,7 @@ private:
 		void (UZCCombatComponent::*EndCallback)(UAnimMontage*, bool),
 		float BlendInOverride = -1.0f);
 	void HandleDrawMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+	void ClearDrawMontageEndDelegate();
 	void HandleAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void HandleSheathMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	void ClearAttackMontageEndDelegate(UAnimInstance* AnimInstance);
@@ -288,10 +354,15 @@ private:
 		float NormalizedTime);
 	void ClearAttachmentTimer();
 	void HandleAttachmentTimerElapsed();
+	void ApplyEquipmentAttachmentState(EZCWeaponAttachmentState AttachmentState);
 
 	/** 拔刀时播放的武器蒙太奇。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
 	TObjectPtr<UAnimMontage> DrawSwordMontage;
+
+	/** 锁定目标时使用的附加拔刀蒙太奇；缺失时回退到普通拔刀。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
+	TObjectPtr<UAnimMontage> DrawSwordOnLockonAdditiveMontage;
 
 	/** 收刀时播放的武器蒙太奇。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
@@ -313,6 +384,18 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Weapon|Animation")
 	TObjectPtr<UAnimMontage> AttackMontage04;
 
+	/** 守卫受击表现。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Defense|Animation")
+	TObjectPtr<UAnimMontage> GuardHitMontage;
+
+	/** 招架表现；成功窗口由下方时间参数限定。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Defense|Animation")
+	TObjectPtr<UAnimMontage> GuardParryMontage;
+
+	/** 破防表现。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZCase|Combat|Defense|Animation")
+	TObjectPtr<UAnimMontage> GuardBreakMontage;
+
 	/** 武器保持 Equipped 后自动请求收刀的等待秒数。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon", meta = (ClampMin = "0.1"))
 	float AutoSheathDelay = 5.0f;
@@ -324,6 +407,30 @@ private:
 	/** 收刀蒙太奇中装备回到背部挂点的归一化时刻。 */
 	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Weapon|Animation", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SheathAttachmentNormalizedTime = 0.70f;
+
+	/** 守卫正面判定的半角；90 度表示前半球。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float GuardFrontHalfAngleDegrees = 90.0f;
+
+	/** 连续成功挡住多少次后进入破防。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense", meta = (ClampMin = "1"))
+	int32 GuardBlocksToBreak = 3;
+
+	/** 多久没有新的格挡命中后清零连续格挡次数。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense", meta = (ClampMin = "0.0"))
+	float GuardBlockResetTime = 3.0f;
+
+	/** 招架蒙太奇开始后的成功判定起点（秒）。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense|Parry", meta = (ClampMin = "0.0"))
+	float ParryWindowStartTime = 0.0f;
+
+	/** 招架蒙太奇开始后的成功判定终点（秒）。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense|Parry", meta = (ClampMin = "0.0"))
+	float ParryWindowEndTime = 0.20f;
+
+	/** 缺少破防蒙太奇时仍需短暂锁住动作，避免状态永久卡在 Broken。 */
+	UPROPERTY(EditAnywhere, Category = "ZCase|Combat|Defense", meta = (ClampMin = "0.0"))
+	float GuardBreakRecoveryDuration = 0.75f;
 
 	/** 驱动拔刀、攻击和收刀输入策略的武器状态机。 */
 	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Weapon")
@@ -380,6 +487,31 @@ private:
 	FTimerHandle AttachmentTimerHandle;
 	/** Timer 到期时准备应用的挂点状态。 */
 	EZCWeaponAttachmentState PendingAttachmentState = EZCWeaponAttachmentState::Sheathed;
+	/** 当前实际播放的拔刀蒙太奇，普通和锁定拔刀各自校验自己的结束回调。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveDrawMontage;
+
+	/** 当前防御表现状态，不依赖 WeaponState 或 AttachmentState。 */
+	UPROPERTY(VisibleInstanceOnly, Category = "ZCase|Combat|Defense")
+	EZCDefenseState DefenseState = EZCDefenseState::Normal;
+	/** 目标锁定产生的自动守卫意图。 */
+	bool bTargetLockActive = false;
+	/** 攻击、跳跃、冲刺、技能和持物期间暂时隐藏守卫姿势。 */
+	bool bGuardSuppressed = false;
+	/** ParryWindowStart/End Timer 的代数校验。 */
+	uint32 ParryWindowGeneration = 0;
+	/** 当前是否位于招架有效窗口。 */
+	bool bParryWindowActive = false;
+	/** 当前已成功格挡的连续次数。 */
+	int32 GuardBlockCount = 0;
+	/** 防御蒙太奇结束回调的代数，防止旧回调清理新状态。 */
+	uint32 DefenseMontageGeneration = 0;
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveDefenseMontage;
+	FTimerHandle GuardBlockResetTimerHandle;
+	FTimerHandle ParryWindowStartTimerHandle;
+	FTimerHandle ParryWindowEndTimerHandle;
+	FTimerHandle GuardBreakFallbackTimerHandle;
 	/** 当前是否存在一条尚未结束的攻击生命周期。 */
 	bool bAttackActive = false;
 	/** 当前正在播放的攻击蒙太奇；玩家连段和敌人 AI 都通过它校验结束回调。 */

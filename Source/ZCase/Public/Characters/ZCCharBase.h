@@ -132,6 +132,17 @@ public:
 	UPROPERTY(EditAnywhere, Category="Inputs")
 	UInputAction* AttackAction;
 
+	/** 手动收起武器，复用 Combat 的收刀动画和状态机。 */
+	UPROPERTY(EditAnywhere, Category="Inputs")
+	UInputAction* OffWeaponAction;
+
+	/** Optional IA_Guard action; bind it to Right Mouse in IMC_ZC when the asset is created. */
+	UPROPERTY(EditAnywhere, Category="Inputs")
+	UInputAction* GuardAction;
+
+	/** 当前动作是否允许举盾；供伤害和动画即时查询。 */
+	bool CanMaintainGuard() const;
+
 	UPROPERTY(VisibleInstanceOnly,BlueprintReadOnly,category="Movements")
 	EMovementTypes CurrentMT{ EMovementTypes ::MT_EMAX};
 
@@ -337,6 +348,13 @@ protected:
 	/** Enhanced Input 的统一左键 Started 回调；按交互/技能状态分流。 */
 	UFUNCTION()
 	void Attack_Started(const FInputActionValue& val);
+
+	UFUNCTION()
+	void OffWeapon_Started(const FInputActionValue& val);
+
+	/** Enhanced Input 的右键 Started 回调；交给 Combat 尝试有限窗口招架。 */
+	UFUNCTION()
+	void Guard_Started(const FInputActionValue& val);
 	
 #pragma endregion
 	
@@ -517,6 +535,9 @@ public:
 
 	/** 设置移动组件的旋转模式；TargetLockComponent 不负责角色旋转。 */
 	void SetTargetLockRotationMode(bool bEnableTargetLockRotation);
+
+	/** 每帧把移动、技能和持物状态同步为 Combat 的守卫抑制条件。 */
+	void UpdateGuardSuppression();
 
 	bool bTargetLockRotationActive = false;
 };

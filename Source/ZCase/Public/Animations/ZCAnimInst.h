@@ -47,6 +47,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References")
 	bool bWeaponEquipped = false;
 
+	/** 由 Combat 独立防御状态驱动；供 ABP_Link 接 Guard_Wait。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Defense")
+	bool bGuarding = false;
+
 	/** 当前是否持有有效的目标锁定目标。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Target Lock")
 	bool bIsTargetLocked = false;

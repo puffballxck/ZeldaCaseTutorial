@@ -26,6 +26,7 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	if (!IsValid(PlayerRef))
 	{
 		bIsTargetLocked = false;
+		bGuarding = false;
 		LockOnDirection = 0.0f;
 		return;
 	}
@@ -54,6 +55,7 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	bReadyToThrow = PlayerRef->bReadyToThrow;
 	// 拔刀完成后才进入装备姿势；攻击和收刀期间继续保持该姿势，直到收刀结束。
 	bWeaponEquipped = PlayerRef->Combat && PlayerRef->Combat->IsWeaponEquippedForAnimation();
+	bGuarding = PlayerRef->Combat && PlayerRef->Combat->IsGuardPoseActive();
 	LockOnDirection = bIsTargetLocked
 		? CalculateLockOnDirection(
 			PlayerRef->GetActorRotation(),

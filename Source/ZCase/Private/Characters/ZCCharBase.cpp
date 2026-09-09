@@ -150,6 +150,20 @@ void AZCCharBase::BeginPlay()
 			nullptr,
 			TEXT("/Game/_Game/Data/Inputs/IA_Inventory.IA_Inventory"));
 	}
+	if (!OffWeaponAction)
+	{
+		OffWeaponAction = LoadObject<UInputAction>(
+			nullptr, TEXT("/Game/_Game/Data/Inputs/IA_OffWeapon.IA_OffWeapon"));
+	}
+
+	if (!GuardAction)
+	{
+		// Optional until the user creates and maps IA_Guard; a missing asset keeps
+		// the existing input setup valid and simply leaves the binding absent.
+		GuardAction = LoadObject<UInputAction>(
+			nullptr,
+			TEXT("/Game/_Game/Data/Inputs/IA_Guard.IA_Guard"));
+	}
 
 	// 输入接线只对本地玩家生效，但战斗状态仍必须为 AI、服务器和编辑器实例初始化。
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
@@ -189,6 +203,12 @@ void AZCCharBase::BeginPlay()
 	{
 		// BeginPlay 时把角色网格和三件装备交给 Combat，建立统一的挂点控制入口。
 		Combat->InitializeEquipment(GetMesh(), SwordMesh, SheathMesh, ShieldMesh);
+	}
+	// InitializeEquipment resets transient combat state; resync an already
+	// selected target so pre-existing lock-on still enables automatic guard.
+	if (TargetLock)
+	{
+		HandleTargetChanged(nullptr, TargetLock->GetCurrentTarget());
 	}
 
 	//为磁铁吸附技能事先筛选场景中的Actor，存放在AllMagSMs数组中
@@ -255,6 +275,19 @@ float AZCCharBase::TakeDamage(
 	}
 
 	TGuardValue<bool> DamageGuard(bDamageProcessing, true);
+	UpdateGuardSuppression();
+	const EZCDefenseHitResult DefenseResult = Combat
+		? Combat->ResolveIncomingDamage(DamageEvent, DamageCauser)
+		: EZCDefenseHitResult::None;
+	if (DefenseResult == EZCDefenseHitResult::Blocked
+		|| DefenseResult == EZCDefenseHitResult::Parried
+		|| DefenseResult == EZCDefenseHitResult::GuardBroken)
+	{
+		// Blocking, a successful parry, and the breaking hit all consume the hit
+		// before Super/Attributes can decrement health.
+		return 0.0f;
+	}
+	const bool bDamageDuringGuardBreak = DefenseResult == EZCDefenseHitResult::DamageThroughBroken;
 	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门。
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	if (!Attributes || !FMath::IsFinite(EngineDamage) || EngineDamage <= 0.0f)
@@ -281,7 +314,12 @@ float AZCCharBase::TakeDamage(
 	}
 	else
 	{
-		PlayHitReact();
+		// Damage during Broken is ordinary health damage, but must not replace the
+		// active break pose with a normal hit reaction.
+		if (!bDamageDuringGuardBreak)
+		{
+			PlayHitReact();
+		}
 	}
 	return Result.AppliedDamage;
 }
@@ -421,6 +459,10 @@ FVector AZCCharBase::GetTargetLockLocation() const
 void AZCCharBase::Landed(const FHitResult& Hit) //着陆逻辑
 {
 	Super::Landed(Hit);
+	if (Combat && !Combat->IsGuardBroken() && CurrentMT != EMovementTypes::MT_Sprinting)
+	{
+		Combat->SetGuardSuppressed(false);
+	}
 	if (CurrentMT == EMovementTypes::MT_Exhausted)
 	{
 		//立刻回复精力
@@ -450,6 +492,13 @@ void AZCCharBase::Landed(const FHitResult& Hit) //着陆逻辑
 
 void AZCCharBase::Move_Triggered(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		Vel_X = 0.0f;
+		Vel_Y = 0.0f;
+		return;
+	}
+
 	const FVector2d InputVector = val.Get<FVector2d>();
 	Vel_X = InputVector.X;
 	Vel_Y = InputVector.Y;
@@ -512,6 +561,10 @@ void AZCCharBase::TargetUnlock_Started(const FInputActionValue& val)
 	{
 		TargetLock->ClearTarget();
 	}
+	else if (Combat)
+	{
+		Combat->SetTargetLockActive(false);
+	}
 }
 
 #pragma endregion 
@@ -528,21 +581,39 @@ void AZCCharBase::Sprint_Triggered(const FInputActionValue& val)
 
 void AZCCharBase::Sprint_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
 	if (CurrentMT ==EMovementTypes::MT_Falling || GetCharacterMovement()->IsFalling())
 	{
 		return;
 	}
 	else if (CurrentMT == EMovementTypes::MT_Walking|| CurrentMT == EMovementTypes::MT_EMAX)
 	{
+		if (Combat)
+		{
+			Combat->SetGuardSuppressed(true);
+		}
 		LocomotionManager(EMovementTypes::MT_Sprinting);
 	}
 }
 
 void AZCCharBase::Sprint_Completed(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
 	if (CurrentMT == EMovementTypes::MT_Sprinting)
 	{
 		LocomotionManager(EMovementTypes::MT_Walking);
+		if (Combat)
+		{
+			Combat->SetGuardSuppressed(false);
+		}
 	}
 }
 
@@ -552,12 +623,21 @@ void AZCCharBase::Sprint_Completed(const FInputActionValue& val)
 
 void AZCCharBase::JumpGlide_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
 	if (CurrentMT == EMovementTypes::MT_Exhausted)return;
 	
 
 	if (GetCharacterMovement()->MovementMode != MOVE_Falling)
 	{
 		//可以跳跃
+		if (Combat)
+		{
+			Combat->SetGuardSuppressed(true);
+		}
 		Jump();
 		LocomotionManager(EMovementTypes::MT_Falling);
 		return;
@@ -595,6 +675,10 @@ void AZCCharBase::JumpGlide_Started(const FInputActionValue& val)
 	//如果跳过检测或检测通过，则进入滑翔
 	//取消激活释放技能状态
 	AutoDeactivateAllRunes();
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
 	//切换至Gliding滑翔状态
 	LocomotionManager(EMovementTypes::MT_Gliding);
 	
@@ -609,6 +693,7 @@ void AZCCharBase::JumpGlide_Completed(const FInputActionValue& val)
 
 void AZCCharBase::ToggleUI_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken()) return;
 	AutoDeactivateAllRunes();
 
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
@@ -619,17 +704,39 @@ void AZCCharBase::ToggleUI_Started(const FInputActionValue& val)
 
 void AZCCharBase::ActiveRune_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
 	if (!Combat || Combat->CanAcceptCombatInput())
 	{
 		ToggleRuneActivity();
+		if (Combat && GetActivatedRune() == ERunes::R_EMAX && !InteractingActor)
+		{
+			Combat->SetGuardSuppressed(false);
+		}
 	}
 }
 
 void AZCCharBase::ReleaseRune_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
 	if (Combat && !Combat->CanAcceptCombatInput())
 	{
 		return;
+	}
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
 	}
 
 	//检查是否有可投掷的物品
@@ -665,13 +772,32 @@ void AZCCharBase::ReleaseRune_Started(const FInputActionValue& val)
 			break;
 		}
 	}
+
+	if (Combat && GetActivatedRune() == ERunes::R_EMAX && !InteractingActor)
+	{
+		Combat->SetGuardSuppressed(false);
+	}
 	
 }
 
 void AZCCharBase::Interact_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
+
 	//取消已经激活的技能
 	AutoDeactivateAllRunes();
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
 	
 	// 尝试交互
 	if (InteractingActor)
@@ -693,12 +819,18 @@ void AZCCharBase::Interact_Started(const FInputActionValue& val)
 		InteractingActor->ToggleInteractionBP(this);
 
 	}
+
+	if (Combat && GetActivatedRune() == ERunes::R_EMAX && !InteractingActor)
+	{
+		Combat->SetGuardSuppressed(false);
+	}
 	
 }
 
 void AZCCharBase::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+	UpdateGuardSuppression();
 
 	if (bTargetLockRotationActive)
 	{
@@ -741,6 +873,17 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	{
 		EIComp->BindAction(TargetUnlockAction, ETriggerEvent::Started, this, &AZCCharBase::TargetUnlock_Started);
 	}
+
+	if (!GuardAction)
+	{
+		GuardAction = LoadObject<UInputAction>(
+			nullptr,
+			TEXT("/Game/_Game/Data/Inputs/IA_Guard.IA_Guard"));
+	}
+	if (GuardAction)
+	{
+		EIComp->BindAction(GuardAction, ETriggerEvent::Started, this, &AZCCharBase::Guard_Started);
+	}
 	
 	EIComp->BindAction(SprintAction,ETriggerEvent::Triggered,this,&AZCCharBase::Sprint_Triggered);
 	EIComp->BindAction(SprintAction,ETriggerEvent::Completed,this,&AZCCharBase::Sprint_Completed);
@@ -760,10 +903,32 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 		// 使用 Started 事件把 IA_Attack 接到角色回调，再由 Combat 决定拔刀或攻击。
 		EIComp->BindAction(AttackAction, ETriggerEvent::Started, this, &AZCCharBase::Attack_Started);
 	}
+	if (!OffWeaponAction)
+	{
+		OffWeaponAction = LoadObject<UInputAction>(
+			nullptr, TEXT("/Game/_Game/Data/Inputs/IA_OffWeapon.IA_OffWeapon"));
+	}
+	if (OffWeaponAction)
+	{
+		EIComp->BindAction(OffWeaponAction, ETriggerEvent::Started, this, &AZCCharBase::OffWeapon_Started);
+	}
+}
+
+void AZCCharBase::OffWeapon_Started(const FInputActionValue& val)
+{
+	if (!bDeathStarted && Combat)
+	{
+		Combat->RequestSheath();
+	}
 }
 
 void AZCCharBase::Attack_Started(const FInputActionValue& val)
 {
+	if (Combat && Combat->IsGuardBroken())
+	{
+		return;
+	}
+
 	// Left mouse is the single gameplay action: an active rune releases first,
 	// while the inactive state keeps the original Combat attack behavior.
 	if (InteractingActor != nullptr || GetActivatedRune() != ERunes::R_EMAX)
@@ -777,6 +942,15 @@ void AZCCharBase::Attack_Started(const FInputActionValue& val)
 	{
 		// 角色不直接修改武器状态，避免输入层绕过 Combat 的状态机策略。
 		Combat->HandleAttackInput();
+	}
+}
+
+void AZCCharBase::Guard_Started(const FInputActionValue& val)
+{
+	UpdateGuardSuppression();
+	if (Combat && !Combat->IsGuardBroken())
+	{
+		Combat->HandleGuardInput();
 	}
 }
 void AZCCharBase::LocomotionManager(EMovementTypes NewMovement)
@@ -1026,6 +1200,16 @@ void AZCCharBase::AutoDeactivateAllRunes()
 	{
 		bReadyToThrow = false;
 	}
+	if (Combat
+		&& !Combat->IsGuardBroken()
+		&& GetActivatedRune() == ERunes::R_EMAX
+		&& !InteractingActor
+		&& CurrentMT != EMovementTypes::MT_Sprinting
+		&& GetCharacterMovement()
+		&& !GetCharacterMovement()->IsFalling())
+	{
+		Combat->SetGuardSuppressed(false);
+	}
 }
 
 void AZCCharBase::ToggleRuneActivity()
@@ -1070,6 +1254,11 @@ void AZCCharBase::ToggleRuneActivity()
 
 void AZCCharBase::HandleActiveRuneChanged(const ERunes PreviousRune, const ERunes CurrentRune)
 {
+	if (Combat && CurrentRune != ERunes::R_EMAX)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
+
 	if (PreviousRune != ERunes::R_EMAX)
 	{
 		ApplyRuneActivation(PreviousRune, false);
@@ -1097,6 +1286,16 @@ void AZCCharBase::HandleActiveRuneChanged(const ERunes PreviousRune, const ERune
 
 	bFlipflopCrosshair = CurrentRune != ERunes::R_EMAX;
 	CrossHairAndCameraMode(bFlipflopCrosshair);
+	if (Combat
+		&& CurrentRune == ERunes::R_EMAX
+		&& !InteractingActor
+		&& CurrentMT != EMovementTypes::MT_Sprinting
+		&& GetCharacterMovement()
+		&& !GetCharacterMovement()->IsFalling()
+		&& !Combat->IsGuardBroken())
+	{
+		Combat->SetGuardSuppressed(false);
+	}
 }
 
 bool AZCCharBase::ApplyRuneActivation(const ERunes RuneType, const bool bShouldActivate)
@@ -1676,6 +1875,10 @@ void AZCCharBase::RestoreStasisState(const bool bApplyStoredImpulse)
 void AZCCharBase::ReadyToThrow(UStaticMeshComponent* SMRef)
 {
 	if (SMRef == nullptr) return;
+	if (Combat)
+	{
+		Combat->SetGuardSuppressed(true);
+	}
 	SMRef->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
 	SMRef->SetSimulatePhysics(true);
 	CrossHairAndCameraMode(false);
@@ -1690,6 +1893,10 @@ void AZCCharBase::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTar
 		: nullptr;
 	const bool bHasValidTarget = Targetable && Targetable->CanBeTargetLocked();
 	SetTargetLockRotationMode(bHasValidTarget);
+	if (Combat)
+	{
+		Combat->SetTargetLockActive(bHasValidTarget);
+	}
 }
 
 void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)
@@ -1760,6 +1967,30 @@ void AZCCharBase::SetTargetLockRotationMode(const bool bEnableTargetLockRotation
 	{
 		Movement->bOrientRotationToMovement = !bEnableTargetLockRotation;
 	}
+}
+
+bool AZCCharBase::CanMaintainGuard() const
+{
+	const UCharacterMovementComponent* Movement = GetCharacterMovement();
+	return !bDeathStarted && Movement && Movement->IsMovingOnGround()
+		&& CurrentMT != EMovementTypes::MT_Sprinting
+		&& CurrentMT != EMovementTypes::MT_Falling
+		&& CurrentMT != EMovementTypes::MT_Gliding
+		&& GetActivatedRune() == ERunes::R_EMAX
+		&& !InteractingActor && !bReadyToThrow;
+}
+
+void AZCCharBase::UpdateGuardSuppression()
+{
+	if (!Combat)
+	{
+		return;
+	}
+
+	const bool bGameplaySuppressed = Combat->IsGuardBroken()
+		|| Combat->GetWeaponState() == EZCWeaponState::Attacking
+		|| !CanMaintainGuard();
+	Combat->SetGuardSuppressed(bGameplaySuppressed);
 }
 
 #pragma endregion
