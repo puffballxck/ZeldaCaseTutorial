@@ -23,6 +23,7 @@
 #include "Actors/StaticActor.h"
 #include "Components/ArrowComponent.h"
 #include "Actors/InteractBase.h"
+#include "Actors/ZCInventoryPickupActor.h"
 #include "Actors/PickupActor.h"
 #include "Interface/MyInterface.h"
 #include "Combat/ZCAttributeComponent.h"
@@ -810,10 +811,35 @@ void AZCCharBase::Interact_Started(const FInputActionValue& val)
 	{
 		TSet<AActor*> tempActors;
 		GetOverlappingActors(tempActors);
-		if (!tempActors.IsValidId(FSetElementId::FromInteger(0))) return;
-		//if (!tempActors.Array()[0]) return;
-		InteractingActor = Cast<AInteractBase>(tempActors.Array()[0]);
-		if (!InteractingActor) return;
+		// 忽略普通碰撞体，在有效交互对象中选择距离最近的一个。
+		float ClosestDistanceSquared = TNumericLimits<float>::Max();
+		for (AActor* Actor : tempActors)
+		{
+			AInteractBase* Candidate = Cast<AInteractBase>(Actor);
+			if (!IsValid(Candidate)) continue;
+			const float DistanceSquared = FVector::DistSquared(GetActorLocation(), Candidate->GetActorLocation());
+			if (DistanceSquared < ClosestDistanceSquared)
+			{
+				ClosestDistanceSquared = DistanceSquared;
+				InteractingActor = Candidate;
+			}
+		}
+		if (!InteractingActor)
+		{
+			if (Combat)
+			{
+				Combat->SetGuardSuppressed(false);
+			}
+			return;
+		}
+		// 入包拾取没有举起/放下的后续交互，由拾取物自身等待 Montage 结束。
+		if (AZCInventoryPickupActor* Pickup = Cast<AZCInventoryPickupActor>(InteractingActor))
+		{
+			InteractingActor = nullptr;
+			Pickup->ToggleInteraction(this);
+			if (Combat) Combat->SetGuardSuppressed(false);
+			return;
+		}
 		//开始交互
 		InteractingActor->ToggleInteraction(this);
 		InteractingActor->ToggleInteractionBP(this);
