@@ -165,6 +165,17 @@ bool UZCTargetLockComponent::AcquireBestTarget(
 		return false;
 	}
 
+	const FVector OwnerLocation = Owner->GetActorLocation();
+	if (!IsFiniteVector(OwnerLocation))
+	{
+		return false;
+	}
+
+	const APawn* OwnerPawn = Cast<APawn>(Owner);
+	const APlayerController* PlayerController = OwnerPawn && OwnerPawn->IsLocallyControlled()
+		? Cast<APlayerController>(OwnerPawn->GetController())
+		: nullptr;
+
 	const float SafeAcquisitionRadius = FMath::Max(AcquisitionRadius, 0.0f);
 	const float SafeHalfAngle = FMath::Clamp(AcquisitionHalfAngle, 0.0f, 180.0f);
 	const float RadiusSquared = FMath::Square(SafeAcquisitionRadius);
@@ -198,15 +209,21 @@ bool UZCTargetLockComponent::AcquireBestTarget(
 			continue;
 		}
 
-		const FVector ToTarget = TargetLocation - ViewLocation;
-		const float DistanceSquared = ToTarget.SizeSquared();
+		const FVector OwnerToTarget = TargetLocation - OwnerLocation;
+		const FVector ViewToTarget = TargetLocation - ViewLocation;
+		const float DistanceSquared = OwnerToTarget.SizeSquared();
 		if (!FMath::IsFinite(DistanceSquared) || DistanceSquared > RadiusSquared || DistanceSquared <= KINDA_SMALL_NUMBER)
 		{
 			continue;
 		}
 
 		const float Distance = FMath::Sqrt(DistanceSquared);
-		const FVector DirectionToTarget = ToTarget / Distance;
+		const float ViewDistanceSquared = ViewToTarget.SizeSquared();
+		if (!FMath::IsFinite(ViewDistanceSquared) || ViewDistanceSquared <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FVector DirectionToTarget = ViewToTarget / FMath::Sqrt(ViewDistanceSquared);
 		const float DirectionDot = FVector::DotProduct(ViewDirection, DirectionToTarget);
 		if (!FMath::IsFinite(DirectionDot) || DirectionDot < CosHalfAngle)
 		{
@@ -214,6 +231,14 @@ bool UZCTargetLockComponent::AcquireBestTarget(
 		}
 
 		if (!IsTargetVisible(Candidate, ViewLocation))
+		{
+			continue;
+		}
+
+		// 真实本地玩家沿用循环锁定的安全屏幕边界；自动化/非玩家对象
+		// 没有本地视点时保留原有的参数化获取回退路径。
+		if (PlayerController
+			&& !IsTargetInScreenSafeArea(Candidate, PlayerController, ViewLocation, ViewForward.Rotation()))
 		{
 			continue;
 		}
@@ -296,31 +321,45 @@ void UZCTargetLockComponent::TickComponent(
 		return;
 	}
 
-	// 本地玩家目标还必须处于屏幕安全区内；非玩家/自动化对象没有本地视点
-	// 时才回退到拥有者位置，避免测试对象被强行依赖屏幕投影。
+	// 本地玩家目标离开屏幕安全区后先进入宽限计时；非玩家/自动化对象没有
+	// 本地视点时回退到拥有者位置，避免测试对象被强行依赖屏幕投影。
 	FVector ViewLocation = OwnerLocation;
+	bool bTargetInScreenSafeArea = true;
 	if (const APawn* PawnOwner = Cast<APawn>(Owner))
 	{
 		if (PawnOwner->IsLocallyControlled())
 		{
 			const APlayerController* PlayerController = Cast<APlayerController>(PawnOwner->GetController());
-			if (!PlayerController)
+			if (PlayerController)
 			{
-				ClearTarget();
-				return;
-			}
-
-			FRotator ViewRotation;
-			PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
-			if (!IsTargetInScreenSafeArea(Target, PlayerController, ViewLocation, ViewRotation))
-			{
-				ClearTarget();
-				return;
+				FRotator ViewRotation;
+				PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
+				bTargetInScreenSafeArea = IsTargetInScreenSafeArea(
+					Target,
+					PlayerController,
+					ViewLocation,
+					ViewRotation);
 			}
 		}
 	}
 
 	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
+	if (!bTargetInScreenSafeArea)
+	{
+		OffScreenDuration = FMath::Min(OffScreenDuration + SafeDeltaTime, 1000000.0f);
+		const float SafeGracePeriod = FMath::Max(OffScreenGracePeriod, 0.0f);
+		if (SafeGracePeriod <= KINDA_SMALL_NUMBER || OffScreenDuration >= SafeGracePeriod)
+		{
+			// 锁定镜头下目标可以短暂离屏；持续离屏才结束锁定生命周期。
+			ClearTarget();
+			return;
+		}
+	}
+	else
+	{
+		OffScreenDuration = 0.0f;
+	}
+
 	if (!IsTargetVisible(Target, ViewLocation))
 	{
 		OccludedDuration = FMath::Min(OccludedDuration + SafeDeltaTime, 1000000.0f);
@@ -465,6 +504,7 @@ void UZCTargetLockComponent::ReplaceTarget(AActor* NewTarget)
 
 	CurrentTarget = NewTarget;
 	OccludedDuration = 0.0f;
+	OffScreenDuration = 0.0f;
 	if (NewTarget)
 	{
 		// 有目标时监听销毁事件并开启 Tick，持续验证目标可用性。

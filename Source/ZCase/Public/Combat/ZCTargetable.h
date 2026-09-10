@@ -22,7 +22,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
 	virtual bool CanBeTargetLocked() const = 0;
 
-	/** 返回用于锁定镜头或准星的世界空间位置。 */
+	/** 返回用于锁定准星、可见性和 UI 的世界空间位置。 */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Target Lock")
 	virtual FVector GetTargetLockLocation() const = 0;
+
+	/** 返回用于锁定镜头的世界空间位置；默认沿用准星/UI 锚点。 */
+	virtual FVector GetTargetLockCameraLocation() const { return GetTargetLockLocation(); }
 };

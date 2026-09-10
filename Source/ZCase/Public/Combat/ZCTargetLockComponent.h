@@ -77,6 +77,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float OcclusionGracePeriod = 0.75f;
 
+	/** 本地玩家目标离开屏幕安全区后允许持续的宽限时间（秒）。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
+	float OffScreenGracePeriod = 0.8f;
+
 	/** 获取评分中角度项的权重。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float AngleWeight = 0.8f;
@@ -110,4 +114,5 @@ private:
 
 	TWeakObjectPtr<AActor> CurrentTarget;
 	float OccludedDuration = 0.0f;
+	float OffScreenDuration = 0.0f;
 };

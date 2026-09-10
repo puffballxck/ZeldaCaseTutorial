@@ -41,6 +41,13 @@ public:
 	/** 返回敌人头部 Socket 的锁定锚点；缺少 Socket 时回退到胶囊体上半身。 */
 	virtual FVector GetTargetLockLocation() const override;
 
+	/** 返回镜头用胸口锚点；缺少配置 Socket 时回退到稳定的胶囊体位置。 */
+	virtual FVector GetTargetLockCameraLocation() const override;
+
+	/** 敌人镜头锁定优先读取的胸口 Socket；不同骨架可在蓝图中调整。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera")
+	FName TargetLockCameraSocketName = TEXT("TargetLock");
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

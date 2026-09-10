@@ -379,6 +379,25 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float TargetLockRotationSpeed = 720.0f;
 
+	/** 锁定镜头焦点中目标位置的权重。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float TargetLockCameraFocus = 0.65f;
+
+	/** 锁定镜头旋转插值速度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera", meta = (ClampMin = "0.0"))
+	float TargetLockCameraInterpSpeed = 6.0f;
+
+	/** 锁定镜头焦点相对角色位置的高度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera", meta = (ClampMin = "0.0"))
+	float TargetLockCameraPlayerFocusHeight = 80.0f;
+
+	/** 锁定镜头允许的最小/最大 Pitch。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera", meta = (ClampMin = "-90.0", ClampMax = "90.0"))
+	float TargetLockCameraMinPitch = -60.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock|Camera", meta = (ClampMin = "-90.0", ClampMax = "90.0"))
+	float TargetLockCameraMaxPitch = 35.0f;
+
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
 	bool IsDeathStarted() const { return bDeathStarted; }
 	
@@ -533,6 +552,12 @@ public:
 	/** 在角色 Tick 中按锁定目标更新水平朝向。 */
 	void UpdateTargetLockOrientation(float DeltaTime);
 
+	/** 在本地玩家上按角色/目标焦点更新锁定镜头。 */
+	void UpdateTargetLockCamera(float DeltaTime);
+
+	/** 统一判断目标锁定能否进入或继续维持。 */
+	bool CanUseTargetLock() const;
+
 	/** 设置移动组件的旋转模式；TargetLockComponent 不负责角色旋转。 */
 	void SetTargetLockRotationMode(bool bEnableTargetLockRotation);
 
@@ -540,6 +565,8 @@ public:
 	void UpdateGuardSuppression();
 
 	bool bTargetLockRotationActive = false;
+	FVector TargetLockCameraFocusLocation = FVector::ZeroVector;
+	bool bTargetLockCameraFocusInitialized = false;
 };
 
 

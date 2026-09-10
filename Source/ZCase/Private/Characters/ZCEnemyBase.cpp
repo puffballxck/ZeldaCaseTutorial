@@ -125,6 +125,26 @@ FVector AZCEnemyBase::GetTargetLockLocation() const
 	return GetActorLocation() + FVector::UpVector * HeightOffset;
 }
 
+FVector AZCEnemyBase::GetTargetLockCameraLocation() const
+{
+	if (const USkeletalMeshComponent* EnemyMesh = GetMesh())
+	{
+		if (!TargetLockCameraSocketName.IsNone()
+			&& EnemyMesh->DoesSocketExist(TargetLockCameraSocketName))
+		{
+			return EnemyMesh->GetSocketLocation(TargetLockCameraSocketName);
+		}
+	}
+
+	// The camera anchor deliberately does not reuse the animated head/UI point;
+	// the capsule fallback keeps the lock focus stable when the chest socket is absent.
+	const UCapsuleComponent* Capsule = GetCapsuleComponent();
+	const float HeightOffset = Capsule
+		? Capsule->GetScaledCapsuleHalfHeight() * 0.5f
+		: 0.0f;
+	return GetActorLocation() + FVector::UpVector * HeightOffset;
+}
+
 void AZCEnemyBase::PlayHitReact()
 {
 	if (bDeathStarted)
