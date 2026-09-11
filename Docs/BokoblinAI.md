@@ -4,7 +4,7 @@
 
 ## 运行时分工
 
-- `AZCBokoblinAIController`：Sight 感知、TargetActor、Focus、Possess 时启动 BT。
+- `AZCBokoblinAIController`：Sight 感知、TargetActor、Focus、Possess 时记录出生点并启动 BT；超出活动范围时接管返程。
 - `AZCBokoblinEnemy`：攻击目标与距离检查、停止移动、选择攻击 Montage。
 - `UZCCombatComponent`：攻击生命周期、Notify 窗口、分段 Sphere Sweep、单次攻击去重、ApplyPointDamage。Bokoblin 用右手骨骼作为采样端点，玩家继续用武器 Socket。
 - `UZCBTTask_Attack`：调用攻击入口并等待结束 Delegate；每个 AI 独立实例，Abort 时解绑并关闭攻击。
@@ -51,6 +51,8 @@ Sight 默认 1800 cm，Lose Sight 2200 cm，半视野角 70 度。巡逻 180 cm/
 
 在 `TestLevel` 中用 PIE 依次检查：
 
+其中巡逻步骤仅适用于已接上 Patrol 分支的行为树；之前检查到的当前资产无目标分支为空，不能仅凭存在巡逻 C++ 类就认为会执行巡逻。
+
 1. 出生后在 NavMesh 内随机巡逻，基础动作随速度在 Idle、Walk、Run 间切换。
 2. 玩家进入正面视野后立即中断巡逻并追击。
 3. 追击期间朝向玩家，进入约 130 cm 攻击距离后停步。
@@ -79,3 +81,16 @@ Rider 工程文件已重新生成，新增 AI、Enemy、AnimInstance 和目标�
 ```powershell
 & F:/UE_5.8/Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.exe -projectfiles -project=F:/Utorrent/ZCase/ZCase.uproject -game -rocket
 ```
+
+## 2026-09-12：出生点距离限制与返程
+
+Controller 接管敌人时记录初始位置为出生点；返程及重新索敌不会更改这个位置。每 0.2 秒检查敌人到出生点的水平直线距离，超出范围便停止行为树、清除目标和 Focus、取消当前攻击，使用 ChaseSpeed 沿 NavMesh 跑回。
+
+在 BP_Enemy_Bokoblin 的 Class Defaults 或关卡敌人实例的 `ZCase | Bokoblin | AI` 分类中调整：
+
+- `MaxChaseDistance`：默认 2000 cm，限制敌人与出生点的距离，不是敌人与玩家的距离或累计路程。
+- `ReturnAcceptanceRadius`：默认 75 cm，回家水平容差；运行时不超过最大活动距离的一半。另需落地且高度差不超过 75 cm，避免在其他楼层误判到家。
+
+返程期间忽略新的索敌和攻击请求；受击、死亡仍走原有系统，不回血、不无敌。受击恢复后继续返程。路径失败最多每秒重试，不瞬移，也不会在半路恢复战斗。到家后恢复原行为树并重新查询当前可见玩家；保留 Sight 发现条件，不添加全方向领地感知。
+
+无需更改 BB/BT 或放置额外出生点 Actor。需保证出生点与返程路线有可用导航。保存工作并重启编辑器加载新 C++ 后，手动验证：先把某只敌人的 MaxChaseDistance 调小到 500 cm 便于测试，引它走出范围，观察中断追击并跑回；返程途中靠近不应再次出拳，到家后正面可见玩家应能重新索敌；受击后应继续返程，死亡后不能继续移动。多只敌人应分别返回各自初始位置。

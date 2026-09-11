@@ -321,10 +321,9 @@ void UZCTargetLockComponent::TickComponent(
 		return;
 	}
 
-	// 本地玩家目标离开屏幕安全区后先进入宽限计时；非玩家/自动化对象没有
-	// 本地视点时回退到拥有者位置，避免测试对象被强行依赖屏幕投影。
+	// 维持锁定只检查实际遮挡，不因玩家主动将目标移出画面而解除。
+	// 没有本地玩家视点时，遮挡射线回退到拥有者位置。
 	FVector ViewLocation = OwnerLocation;
-	bool bTargetInScreenSafeArea = true;
 	if (const APawn* PawnOwner = Cast<APawn>(Owner))
 	{
 		if (PawnOwner->IsLocallyControlled())
@@ -334,32 +333,11 @@ void UZCTargetLockComponent::TickComponent(
 			{
 				FRotator ViewRotation;
 				PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
-				bTargetInScreenSafeArea = IsTargetInScreenSafeArea(
-					Target,
-					PlayerController,
-					ViewLocation,
-					ViewRotation);
 			}
 		}
 	}
 
 	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
-	if (!bTargetInScreenSafeArea)
-	{
-		OffScreenDuration = FMath::Min(OffScreenDuration + SafeDeltaTime, 1000000.0f);
-		const float SafeGracePeriod = FMath::Max(OffScreenGracePeriod, 0.0f);
-		if (SafeGracePeriod <= KINDA_SMALL_NUMBER || OffScreenDuration >= SafeGracePeriod)
-		{
-			// 锁定镜头下目标可以短暂离屏；持续离屏才结束锁定生命周期。
-			ClearTarget();
-			return;
-		}
-	}
-	else
-	{
-		OffScreenDuration = 0.0f;
-	}
-
 	if (!IsTargetVisible(Target, ViewLocation))
 	{
 		OccludedDuration = FMath::Min(OccludedDuration + SafeDeltaTime, 1000000.0f);
@@ -504,7 +482,6 @@ void UZCTargetLockComponent::ReplaceTarget(AActor* NewTarget)
 
 	CurrentTarget = NewTarget;
 	OccludedDuration = 0.0f;
-	OffScreenDuration = 0.0f;
 	if (NewTarget)
 	{
 		// 有目标时监听销毁事件并开启 Tick，持续验证目标可用性。

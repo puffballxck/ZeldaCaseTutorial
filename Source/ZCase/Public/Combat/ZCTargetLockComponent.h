@@ -65,7 +65,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0", ClampMax = "180.0"))
 	float AcquisitionHalfAngle = 50.0f;
 
-	/** 本地玩家屏幕边缘的安全边距比例，用于循环候选和持续离屏检查。 */
+	/** 本地玩家屏幕边缘的安全边距比例，仅用于首次获取与循环选敌。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0", ClampMax = "0.25"))
 	float ScreenSafeMargin = 0.05f;
 
@@ -76,10 +76,6 @@ public:
 	/** 目标被遮挡后允许持续的宽限时间（秒）。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
 	float OcclusionGracePeriod = 0.75f;
-
-	/** 本地玩家目标离开屏幕安全区后允许持续的宽限时间（秒）。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
-	float OffScreenGracePeriod = 0.8f;
 
 	/** 获取评分中角度项的权重。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Target Lock", meta = (ClampMin = "0.0"))
@@ -114,5 +110,4 @@ private:
 
 	TWeakObjectPtr<AActor> CurrentTarget;
 	float OccludedDuration = 0.0f;
-	float OffScreenDuration = 0.0f;
 };

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AIController.h"
+#include "Engine/TimerHandle.h"
 #include "Perception/AIPerceptionTypes.h"
 #include "ZCBokoblinAIController.generated.h"
 
@@ -27,6 +28,10 @@ public:
 
 	virtual void OnPossess(APawn* InPawn) override;
 	virtual void OnUnPossess() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Bokoblin|AI")
+	bool IsReturningHome() const { return bReturningHome; }
 
 	/** Sight callback that acquires or releases a living player-controlled Pawn. */
 	UFUNCTION()
@@ -60,6 +65,21 @@ private:
 	void SetPatrolMovement();
 	void SetChaseMovement();
 	void StopAI();
+	void UpdateHomeReturn();
+	void BeginHomeReturn();
+	void FinishHomeReturn();
+	void AcquireVisiblePlayer();
+	bool HasReachedHome() const;
+
+	/** 每次接管时记录起点，返程和重新索敌不会更新它。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "ZCase|Bokoblin|AI", meta = (AllowPrivateAccess = "true"))
+	FVector HomeLocation = FVector::ZeroVector;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "ZCase|Bokoblin|AI", meta = (AllowPrivateAccess = "true"))
+	bool bReturningHome = false;
+
+	FTimerHandle HomeReturnTimer;
+	double NextReturnAttemptTime = 0.0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZCase|Bokoblin|Perception", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UAISenseConfig_Sight> SightConfig;

@@ -3,11 +3,16 @@
 #include "AI/ZCBokoblinAIController.h"
 
 #include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BehaviorTreeComponent.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BrainComponent.h"
 #include "Characters/ZCBokoblinEnemy.h"
 #include "Characters/ZCCharBase.h"
 #include "Combat/ZCAttributeComponent.h"
+#include "Combat/ZCCombatComponent.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Perception/AIPerceptionComponent.h"
@@ -63,6 +68,10 @@ void AZCBokoblinAIController::OnPossess(APawn* InPawn)
 
 	bAIStopped = false;
 	AZCBokoblinEnemy* Enemy = ControlledEnemy.Get();
+	HomeLocation = Enemy->GetActorLocation();
+	bReturningHome = false;
+	GetWorldTimerManager().SetTimer(HomeReturnTimer, this,
+		&AZCBokoblinAIController::UpdateHomeReturn, 0.2f, true);
 	if (SightConfig && PerceptionComponent)
 	{
 		// Reapply CDO/Blueprint overrides when a controller instance is possessed.
@@ -121,9 +130,15 @@ void AZCBokoblinAIController::OnUnPossess()
 	Super::OnUnPossess();
 }
 
+void AZCBokoblinAIController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	GetWorldTimerManager().ClearTimer(HomeReturnTimer);
+	Super::EndPlay(EndPlayReason);
+}
+
 void AZCBokoblinAIController::HandleTargetPerceptionUpdated(AActor* Actor, const FAIStimulus Stimulus)
 {
-	if (bPermanentlyStopped || bAIStopped || !IsValid(Actor))
+	if (bPermanentlyStopped || bAIStopped || bReturningHome || !IsValid(Actor))
 	{
 		return;
 	}
@@ -222,7 +237,7 @@ void AZCBokoblinAIController::UnbindTargetLifecycle()
 
 void AZCBokoblinAIController::HandleTargetAcquired(AActor* Target)
 {
-	if (!IsLivingPlayerTarget(Target))
+	if (bPermanentlyStopped || bAIStopped || bReturningHome || !IsLivingPlayerTarget(Target))
 	{
 		return;
 	}
@@ -286,8 +301,141 @@ void AZCBokoblinAIController::SetChaseMovement()
 	}
 }
 
+bool AZCBokoblinAIController::HasReachedHome() const
+{
+	const AZCBokoblinEnemy* Enemy = ControlledEnemy.Get();
+	if (!Enemy || !Enemy->GetCharacterMovement()->IsMovingOnGround())
+	{
+		return false;
+	}
+	const float MaxDistance = FMath::IsFinite(Enemy->MaxChaseDistance)
+		? FMath::Max(Enemy->MaxChaseDistance, 100.0f) : 2000.0f;
+	const float Radius = FMath::IsFinite(Enemy->ReturnAcceptanceRadius)
+		? FMath::Clamp(Enemy->ReturnAcceptanceRadius, 1.0f, MaxDistance * 0.5f) : 75.0f;
+	const FVector Offset = Enemy->GetActorLocation() - HomeLocation;
+	// 水平接近不能代表到家：避免在楼上、楼下或下落途中恢复索敌。
+	return Offset.SizeSquared2D() <= FMath::Square(Radius)
+		&& FMath::Abs(Offset.Z) <= 75.0f;
+}
+
+void AZCBokoblinAIController::UpdateHomeReturn()
+{
+	AZCBokoblinEnemy* Enemy = ControlledEnemy.Get();
+	if (bPermanentlyStopped || bAIStopped || !Enemy)
+	{
+		return;
+	}
+	if (!Enemy->CanBeTargetLocked())
+	{
+		HandleEnemyDeath(Enemy);
+		return;
+	}
+	if (!bReturningHome)
+	{
+		const float MaxDistance = FMath::IsFinite(Enemy->MaxChaseDistance)
+			? FMath::Max(Enemy->MaxChaseDistance, 100.0f) : 2000.0f;
+		if (FVector::DistSquared2D(Enemy->GetActorLocation(), HomeLocation) > FMath::Square(MaxDistance))
+		{
+			BeginHomeReturn();
+		}
+		return;
+	}
+
+	// 受击沿用原有 Combat 暂停状态；结束后重新请求路径，不改变生命值或给予无敌。
+	if (Enemy->Combat && !Enemy->Combat->CanAcceptCombatInput())
+	{
+		StopMovement();
+		return;
+	}
+	if (HasReachedHome())
+	{
+		FinishHomeReturn();
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now < NextReturnAttemptTime || GetMoveStatus() == EPathFollowingStatus::Moving)
+	{
+		return;
+	}
+
+	// 仅在请求结束/失败后重试，避免每次定时检查都重新寻路。不可达时保持返程态。
+	NextReturnAttemptTime = Now + 1.0;
+	FAIMoveRequest Request(HomeLocation);
+	Request.SetAcceptanceRadius(1.0f);
+	Request.SetReachTestIncludesAgentRadius(false);
+	Request.SetReachTestIncludesGoalRadius(false);
+	Request.SetAllowPartialPath(false);
+	Request.SetUsePathfinding(true);
+	Request.SetProjectGoalLocation(true);
+	Request.SetCanStrafe(false);
+	MoveTo(Request);
+}
+
+void AZCBokoblinAIController::BeginHomeReturn()
+{
+	// 先锁住返程态，再停止旧任务，避免同步 Abort/感知回调重新获取玩家。
+	bReturningHome = true;
+	if (UBehaviorTreeComponent* Tree = Cast<UBehaviorTreeComponent>(GetBrainComponent()))
+	{
+		Tree->StopTree(EBTStopMode::Forced);
+	}
+	else if (UBrainComponent* Brain = GetBrainComponent())
+	{
+		Brain->StopLogic(TEXT("Bokoblin returning home"));
+	}
+	ClearTarget();
+	if (AZCBokoblinEnemy* Enemy = ControlledEnemy.Get())
+	{
+		if (Enemy->Combat)
+		{
+			Enemy->Combat->CancelAttack();
+		}
+		// 清除 Focus 后按移动方向转身，使用追击速度跑回出生点。
+		Enemy->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(Enemy->ChaseSpeed, 0.0f);
+	}
+	NextReturnAttemptTime = 0.0;
+	UpdateHomeReturn();
+}
+
+void AZCBokoblinAIController::AcquireVisiblePlayer()
+{
+	if (!PerceptionComponent)
+	{
+		return;
+	}
+	TArray<AActor*> PerceivedActors;
+	PerceptionComponent->GetCurrentlyPerceivedActors(UAISense_Sight::StaticClass(), PerceivedActors);
+	for (AActor* Actor : PerceivedActors)
+	{
+		if (IsLivingPlayerTarget(Actor))
+		{
+			HandleTargetAcquired(Actor);
+			break;
+		}
+	}
+}
+
+void AZCBokoblinAIController::FinishHomeReturn()
+{
+	if (bPermanentlyStopped || bAIStopped || !ControlledEnemy.IsValid())
+	{
+		return;
+	}
+	StopMovement();
+	bReturningHome = false;
+	SetPatrolMovement();
+	if (ControlledEnemy->BehaviorTree)
+	{
+		RunBehaviorTree(ControlledEnemy->BehaviorTree);
+	}
+	// 玩家可能始终在视野内，不会再产生“刚发现”事件，因此主动重查感知结果。
+	AcquireVisiblePlayer();
+}
+
 void AZCBokoblinAIController::StopAI()
 {
+	GetWorldTimerManager().ClearTimer(HomeReturnTimer);
+	bReturningHome = false;
 	if (!bAIStopped)
 	{
 		bAIStopped = true;

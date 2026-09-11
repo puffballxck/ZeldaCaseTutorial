@@ -29,6 +29,7 @@
 #include "Combat/ZCAttributeComponent.h"
 #include "Combat/ZCCombatComponent.h"
 #include "Combat/ZCTargetLockComponent.h"
+#include "Combat/ZCTargetLockSpringArmComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "InputAction.h"
 #include "UObject/ConstructorHelpers.h"
@@ -44,7 +45,7 @@ AZCCharBase::AZCCharBase()
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 
-	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("相机臂"));
+	CameraBoom = CreateDefaultSubobject<UZCTargetLockSpringArmComponent>(TEXT("相机臂"));
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->TargetArmLength = 400.0f;
 	CameraBoom->bUsePawnControlRotation = true;
@@ -563,24 +564,25 @@ void AZCCharBase::Move_Completed(const FInputActionValue& val)
 
 void AZCCharBase::Look_Triggered(const FInputActionValue& val)
 {
-	FVector2d LookVal = val.Get<FVector2d>();
-	if (Controller == nullptr)return;
+	if (!Controller)
+	{
+		return;
+	}
+	const FVector2D LookVal = val.Get<FVector2D>();
+	if (LookVal.ContainsNaN() || LookVal.IsNearlyZero())
+	{
+		return;
+	}
 
 	if (TargetLock && TargetLock->HasTarget())
 	{
 		if (!CanUseTargetLock())
 		{
-			// Restore free look immediately when a conflicting state starts between
-			// character ticks; the next lock camera update must not take this input.
 			TargetLock->ClearTarget();
-		}
-		else
-		{
-			// While locked, the local lock camera owns Controller Rotation.
-			return;
 		}
 	}
 
+	// Enhanced Input 的缩放、反转和其它修饰器仍由现有 Controller 管线处理。
 	AddControllerYawInput(LookVal.X);
 	AddControllerPitchInput(LookVal.Y);
 }
@@ -937,10 +939,6 @@ void AZCCharBase::Tick(float DeltaTime)
 	if (TargetLock && TargetLock->HasTarget())
 	{
 		UpdateTargetLockOrientation(DeltaTime);
-		if (TargetLock && TargetLock->HasTarget())
-		{
-			UpdateTargetLockCamera(DeltaTime);
-		}
 	}
 
 	//检测当前聚焦目标是否是潜在的可磁铁吸附目标，或更新拖拽位置
@@ -1993,9 +1991,6 @@ void AZCCharBase::ReadyToThrow(UStaticMeshComponent* SMRef)
 
 void AZCCharBase::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
 {
-	bTargetLockCameraFocusInitialized = false;
-	TargetLockCameraFocusLocation = FVector::ZeroVector;
-
 	const IZCTargetable* Targetable = IsValid(CurrentTarget)
 		&& CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass())
 		? Cast<IZCTargetable>(CurrentTarget)
@@ -2018,123 +2013,6 @@ bool AZCCharBase::CanUseTargetLock() const
 		&& GetActivatedRune() == ERunes::R_EMAX
 		&& !InteractingActor
 		&& !bReadyToThrow;
-}
-
-void AZCCharBase::UpdateTargetLockCamera(const float DeltaTime)
-{
-	if (!TargetLock || !TargetLock->HasTarget() || !CanUseTargetLock() || !IsLocallyControlled())
-	{
-		return;
-	}
-
-	APlayerController* PlayerController = Cast<APlayerController>(Controller);
-	AActor* CurrentTarget = TargetLock->GetCurrentTarget();
-	if (!PlayerController || !IsValid(CurrentTarget)
-		|| !CurrentTarget->GetClass()->ImplementsInterface(UZCTargetable::StaticClass()))
-	{
-		return;
-	}
-
-	const IZCTargetable* Targetable = Cast<IZCTargetable>(CurrentTarget);
-	if (!Targetable || !Targetable->CanBeTargetLocked())
-	{
-		TargetLock->ClearTarget();
-		return;
-	}
-
-	const FVector TargetLocation = Targetable->GetTargetLockCameraLocation();
-	const float SafePlayerFocusHeight = FMath::IsFinite(TargetLockCameraPlayerFocusHeight)
-		? FMath::Max(TargetLockCameraPlayerFocusHeight, 0.0f)
-		: 80.0f;
-	const FVector PlayerFocusLocation = GetActorLocation()
-		+ FVector::UpVector * SafePlayerFocusHeight;
-	if (TargetLocation.ContainsNaN() || PlayerFocusLocation.ContainsNaN())
-	{
-		return;
-	}
-
-	const float SafeFocusWeight = FMath::IsFinite(TargetLockCameraFocus)
-		? FMath::Clamp(TargetLockCameraFocus, 0.0f, 1.0f)
-		: 0.65f;
-	const FVector DesiredFocusLocation = FMath::Lerp(
-		PlayerFocusLocation,
-		TargetLocation,
-		SafeFocusWeight);
-	if (DesiredFocusLocation.ContainsNaN())
-	{
-		return;
-	}
-
-	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
-	const float SafeInterpSpeed = FMath::IsFinite(TargetLockCameraInterpSpeed)
-		? FMath::Max(TargetLockCameraInterpSpeed, 0.0f)
-		: 6.0f;
-	if (!bTargetLockCameraFocusInitialized || TargetLockCameraFocusLocation.ContainsNaN())
-	{
-		TargetLockCameraFocusLocation = DesiredFocusLocation;
-		bTargetLockCameraFocusInitialized = true;
-	}
-	else
-	{
-		TargetLockCameraFocusLocation = FMath::VInterpTo(
-			TargetLockCameraFocusLocation,
-			DesiredFocusLocation,
-			SafeDeltaTime,
-			SafeInterpSpeed);
-	}
-	if (TargetLockCameraFocusLocation.ContainsNaN())
-	{
-		bTargetLockCameraFocusInitialized = false;
-		return;
-	}
-
-	FVector ViewLocation;
-	FRotator ViewRotation;
-	PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
-	const FRotator CurrentControlRotation = PlayerController->GetControlRotation();
-	const FVector ToFocus = TargetLockCameraFocusLocation - ViewLocation;
-	if (ViewLocation.ContainsNaN() || ViewRotation.ContainsNaN() || CurrentControlRotation.ContainsNaN()
-		|| ToFocus.ContainsNaN() || ToFocus.IsNearlyZero())
-	{
-		return;
-	}
-
-	const float SafeMinPitch = FMath::IsFinite(TargetLockCameraMinPitch)
-		? FMath::Clamp(TargetLockCameraMinPitch, -90.0f, 90.0f)
-		: -60.0f;
-	const float SafeMaxPitch = FMath::IsFinite(TargetLockCameraMaxPitch)
-		? FMath::Clamp(TargetLockCameraMaxPitch, -90.0f, 90.0f)
-		: 35.0f;
-	const float MinPitch = FMath::Min(SafeMinPitch, SafeMaxPitch);
-	const float MaxPitch = FMath::Max(SafeMinPitch, SafeMaxPitch);
-
-	FRotator DesiredRotation = ToFocus.Rotation();
-	if (DesiredRotation.ContainsNaN())
-	{
-		return;
-	}
-	DesiredRotation.Pitch = FMath::Clamp(
-		FMath::UnwindDegrees(DesiredRotation.Pitch),
-		MinPitch,
-		MaxPitch);
-	DesiredRotation.Yaw = FMath::UnwindDegrees(DesiredRotation.Yaw);
-	DesiredRotation.Roll = 0.0f;
-
-	FRotator NewRotation = FMath::RInterpTo(
-		CurrentControlRotation,
-		DesiredRotation,
-		SafeDeltaTime,
-		SafeInterpSpeed);
-	if (NewRotation.ContainsNaN())
-	{
-		return;
-	}
-	NewRotation.Pitch = FMath::Clamp(
-		FMath::UnwindDegrees(NewRotation.Pitch),
-		MinPitch,
-		MaxPitch);
-	NewRotation.Roll = 0.0f;
-	PlayerController->SetControlRotation(NewRotation);
 }
 
 void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)

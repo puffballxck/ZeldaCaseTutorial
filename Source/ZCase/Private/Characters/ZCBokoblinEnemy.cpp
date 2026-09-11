@@ -63,6 +63,12 @@ void AZCBokoblinEnemy::ConfigureCombat()
 
 bool AZCBokoblinEnemy::TryAttack(AActor* Target)
 {
+	if (const AZCBokoblinAIController* AI = Cast<AZCBokoblinAIController>(GetController());
+		AI && AI->IsReturningHome())
+	{
+		return false;
+	}
+
 	APawn* TargetPawn = Cast<APawn>(Target);
 	if (!TargetPawn || !IsValid(TargetPawn) || !TargetPawn->IsPlayerControlled())
 	{

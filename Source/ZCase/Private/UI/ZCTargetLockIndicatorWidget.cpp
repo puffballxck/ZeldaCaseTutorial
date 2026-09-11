@@ -23,16 +23,18 @@ void UZCTargetLockIndicatorWidget::SetTarget(AActor* NewTarget)
 	}
 
 	Target = NewTarget;
-	// AddToPlayerScreen initially uses a full-screen slot. Normalize the slot
-	// and resolve the first screen position before allowing Slate to paint this
-	// widget, otherwise the first frame can show the WBP's default geometry.
-	SetVisibility(ESlateVisibility::Collapsed);
+	// 先隐藏绘制内容并初始化尺寸，防止首次显示时闪出全屏默认布局。
+	// 暂时无法投影时仍保留可 Tick 的布局。
+	SetRenderOpacity(0.0f);
+	SetVisibility(ESlateVisibility::HitTestInvisible);
+	SetPositionInViewport(FVector2D::ZeroVector, false);
 	SetIndicatorTickEnabled(true);
 	InitializeViewportLayout();
+	SetPositionInViewport(GetDesiredSize() * 0.5f, false);
 
 	if (UpdateIndicatorPosition())
 	{
-		SetVisibility(ESlateVisibility::HitTestInvisible);
+		SetRenderOpacity(1.0f);
 	}
 }
 
@@ -57,20 +59,22 @@ void UZCTargetLockIndicatorWidget::NativeTick(const FGeometry& MyGeometry, const
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	if (!UpdateIndicatorPosition())
+	if (!IsValidIndicatorTarget(Target.Get()))
 	{
-		// This is a presentation failure only; gameplay lock cleanup remains in
-		// UZCTargetLockComponent so the UI cannot drive gameplay state backwards.
 		ClearTarget();
 		return;
 	}
 
-	// SetTarget keeps the widget hidden until its first valid position exists.
-	// This also covers a transient projection failure during initial setup.
-	if (GetVisibility() == ESlateVisibility::Collapsed)
+	if (!UpdateIndicatorPosition())
 	{
-		SetVisibility(ESlateVisibility::HitTestInvisible);
+		// 离屏/短暂投影失败不是目标失效。保留引用和 Tick，并把透明控件
+		// 留在视口内，避免 Slate 裁剪掉屏幕外控件后停止其更新。
+		SetRenderOpacity(0.0f);
+		SetPositionInViewport(GetDesiredSize() * 0.5f, false);
+		return;
 	}
+
+	SetRenderOpacity(1.0f);
 }
 
 bool UZCTargetLockIndicatorWidget::UpdateIndicatorPosition()
@@ -102,6 +106,16 @@ bool UZCTargetLockIndicatorWidget::UpdateIndicatorPosition()
 		IndicatorLocation,
 		ScreenPosition,
 		true))
+	{
+		return false;
+	}
+
+	const FVector2D ViewSize = UWidgetLayoutLibrary::GetPlayerScreenWidgetGeometry(PlayerController).GetLocalSize();
+	if (!FMath::IsFinite(ScreenPosition.X) || !FMath::IsFinite(ScreenPosition.Y)
+		|| !FMath::IsFinite(ViewSize.X) || !FMath::IsFinite(ViewSize.Y)
+		|| ViewSize.X <= 0.0f || ViewSize.Y <= 0.0f
+		|| ScreenPosition.X < 0.0f || ScreenPosition.X > ViewSize.X
+		|| ScreenPosition.Y < 0.0f || ScreenPosition.Y > ViewSize.Y)
 	{
 		return false;
 	}

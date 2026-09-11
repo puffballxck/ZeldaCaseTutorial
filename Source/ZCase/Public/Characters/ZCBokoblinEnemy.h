@@ -44,6 +44,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ZCase|Bokoblin|Movement", meta = (ClampMin = "0.0"))
 	float ChaseSpeed = 400.0f;
 
+	/** 与初始出生点的最大水平距离；超过后停止战斗并跑回。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ZCase|Bokoblin|AI", meta = (ClampMin = "100.0", Units = "cm"))
+	float MaxChaseDistance = 2000.0f;
+
+	/** 返回出生点的水平到达容差，不包含胶囊半径。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ZCase|Bokoblin|AI", meta = (ClampMin = "1.0", Units = "cm"))
+	float ReturnAcceptanceRadius = 75.0f;
+
 	/** Start one selected attack against a living player-controlled Pawn in range. */
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Bokoblin|Combat")
 	bool TryAttack(AActor* Target);
