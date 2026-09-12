@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "Combat/ZCTargetLockSpringArmComponent.h"
 
@@ -27,8 +27,14 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 	{
 		if (bLockFramingActive)
 		{
-			TargetOffset = UnlockedTargetOffset;
-			bLockFramingActive = false;
+			const float Speed = FMath::IsFinite(HeightInterpSpeed) ? FMath::Max(HeightInterpSpeed, 0.1f) : 4.0f;
+			TargetOffset = FMath::VInterpTo(TargetOffset, UnlockedTargetOffset,
+				FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f, Speed);
+			if (TargetOffset.Equals(UnlockedTargetOffset, 0.1f))
+			{
+				TargetOffset = UnlockedTargetOffset;
+				bLockFramingActive = false;
+			}
 		}
 		Super::UpdateDesiredArmLocation(bDoTrace, bDoLocationLag, bDoRotationLag, DeltaTime);
 		return;
@@ -39,7 +45,7 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 		bLockFramingActive = true;
 	}
 	const float MaxHeight = FMath::IsFinite(MaxFramingHeight) ? FMath::Max(MaxFramingHeight, 0.0f) : 300.0f;
-	// 不仅在首次抬高时检测。角色走到新天花板下方后，也必须重新约束臂原点。
+	// 不仅在首次抬高时检测角色走到新天花板下方后，也必须重新约束臂原点
 	auto ConstrainHeight = [&](FVector CandidateOffset)
 	{
 		CandidateOffset.Z = FMath::Clamp(CandidateOffset.Z,
@@ -60,8 +66,8 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 	};
 	TargetOffset = ConstrainHeight(TargetOffset);
 
-	// 锁定构图在本帧输入和移动之后执行。约束时不叠加相机滞后，避免
-	// 已经修正的朝向再次被 lag 拉出边界；解锁后沿用原有 lag 配置。
+	// 锁定构图在本帧输入和移动之后执行约束时不叠加相机滞后，避免
+	// 已经修正的朝向再次被 lag 拉出边界；解锁后沿用原有 lag 配置
 	Super::UpdateDesiredArmLocation(bDoTrace, false, false, DeltaTime);
 	const ULocalPlayer* LocalPlayer = PC->GetLocalPlayer();
 	FSceneViewProjectionData ProjectionData;
@@ -81,23 +87,13 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 	const double MaxSlopeX = (1.0 - 2.0 * Margin) / ProjectionX;
 	const double MaxSlopeY = (1.0 - 2.0 * Margin) / ProjectionY;
 
-	// 同时容纳身体、锁定点和箭头，不能只让胸口一个点留在画面里。
-	TArray<FVector, TInlineAllocator<10>> Points;
+	// 只关注战斗锚点，允许敌人的头、肢体和箭头在近身时出框
+	// 加入玩家躯干位置，避免为了看敌人而完全忽略玩家所在方向
+	TArray<FVector, TInlineAllocator<2>> Points;
 	Points.Add(Targetable->GetTargetLockCameraLocation());
-	const float ArrowHeight = FMath::IsFinite(IndicatorHeight) ? FMath::Max(IndicatorHeight, 0.0f) : 80.0f;
-	Points.Add(Targetable->GetTargetLockLocation() + FVector::UpVector * ArrowHeight);
-	if (const ACharacter* Character = Cast<ACharacter>(Target))
-	{
-		if (const UCapsuleComponent* Capsule = Character->GetCapsuleComponent())
-		{
-			const FVector Center = Capsule->GetComponentLocation();
-			const FVector Extent(Capsule->GetScaledCapsuleRadius(), Capsule->GetScaledCapsuleRadius(), Capsule->GetScaledCapsuleHalfHeight());
-			for (int32 Corner = 0; Corner < 8; ++Corner)
-			{
-				Points.Add(Center + Extent * FVector(Corner & 1 ? 1 : -1, Corner & 2 ? 1 : -1, Corner & 4 ? 1 : -1));
-			}
-		}
-	}
+	const UCapsuleComponent* PlayerCapsule = Player->GetCapsuleComponent();
+	Points.Add(Player->GetActorLocation() + FVector::UpVector
+		* (PlayerCapsule ? PlayerCapsule->GetScaledCapsuleHalfHeight() * 0.25f : 0.0f));
 	for (const FVector& Point : Points)
 	{
 		if (Point.ContainsNaN())
@@ -106,7 +102,7 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 		}
 	}
 
-	// 使用更新过的真实相机位置（包括碰撞缩臂），按最坏的边界误差修正。
+	// 使用更新过的真实相机位置（包括碰撞缩臂），按最坏的边界误差修正
 	auto Measure = [&](FVector& WorstDirection)
 	{
 		const FTransform CameraTransform = Player->FollowCamera->GetComponentTransform();
@@ -116,7 +112,7 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 			FVector Direction = CameraTransform.InverseTransformVectorNoScale(Point - CameraTransform.GetLocation()).GetSafeNormal();
 			if (Direction.IsNearlyZero())
 			{
-				// 相机恰好贴到锚点时视线无定义，不能把零向量送入四元数修正。
+				// 相机恰好贴到锚点时视线无定义，不能把零向量送入四元数修正
 				Direction = -FVector::ForwardVector;
 			}
 			const double Error = Direction.X <= UE_SMALL_NUMBER ? 2.0 - Direction.X
@@ -130,28 +126,21 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 		}
 		return WorstError;
 	};
+	const FRotator InputRotation = PC->GetControlRotation();
+	const FVector CurrentOffset = TargetOffset;
+	FRotator BestRotation = InputRotation;
+	FVector BestOffset = CurrentOffset;
 	FVector WorstDirection;
-	double BestError = Measure(WorstDirection);
-	if (BestError <= 0.0001)
-	{
-		return; // 不回中、不恢复旧视角，也不主动降低已经采用的构图高度。
-	}
-	FRotator BestRotation = PC->GetControlRotation();
-	FVector BestOffset = TargetOffset;
-	const FVector StartingOffset = TargetOffset;
-	FVector LastTriedOffset = StartingOffset;
-	// 常规边界只修正角度；无法容纳整个目标时再分两档抬高相机。
+	double BestError = TNumericLimits<double>::Max();
+
+	// 每帧从原始高度评估；低位能容纳两个锚点时优先低位，不保留旧的抬高档位
+	// 这里只求期望姿态最后统一插值，求解过程不能提前返回并暴露瞬时姿态
 	for (int32 HeightStep = 0; HeightStep < 3; ++HeightStep)
 	{
-		TargetOffset = StartingOffset;
-		TargetOffset.Z = FMath::Max(StartingOffset.Z, UnlockedTargetOffset.Z + MaxHeight * HeightStep / 2.0f);
+		TargetOffset = UnlockedTargetOffset;
+		TargetOffset.Z += MaxHeight * HeightStep / 2.0f;
 		TargetOffset = ConstrainHeight(TargetOffset);
-		if (HeightStep > 0 && TargetOffset.Equals(LastTriedOffset, 0.1f))
-		{
-			continue; // 已达到最高档，或不同档位被同一天花板限制在相同高度。
-		}
-		LastTriedOffset = TargetOffset;
-		PC->SetControlRotation(BestRotation);
+		PC->SetControlRotation(InputRotation);
 		for (int32 Iteration = 0; Iteration <= 8; ++Iteration)
 		{
 			Super::UpdateDesiredArmLocation(bDoTrace, false, false, DeltaTime);
@@ -162,13 +151,9 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 				BestRotation = PC->GetControlRotation();
 				BestOffset = TargetOffset;
 			}
-			if (Error <= 0.0001)
+			if (Error <= 0.0001 || Iteration == 8)
 			{
-				return;
-			}
-			if (Iteration == 8)
-			{
-				break; // 第八次修正也先评估并记录，再考虑换高度。
+				break;
 			}
 			const FQuat CameraRotation = Player->FollowCamera->GetComponentQuat();
 			const double Forward = FMath::Max(WorstDirection.X, 0.001);
@@ -186,9 +171,19 @@ void UZCTargetLockSpringArmComponent::UpdateDesiredArmLocation(
 			}
 			PC->SetControlRotation(Corrected);
 		}
+		if (BestError <= 0.0001)
+		{
+			break;
+		}
 	}
-	// 极端遮挡/贴脸可能没有可行构图，保留误差最小的方案；不绕过碰撞。
-	PC->SetControlRotation(BestRotation);
-	TargetOffset = BestOffset;
+
+	const float SafeDeltaTime = FMath::IsFinite(DeltaTime) ? FMath::Max(DeltaTime, 0.0f) : 0.0f;
+	const float RotationSpeed = FMath::IsFinite(FramingInterpSpeed) ? FMath::Max(FramingInterpSpeed, 0.1f) : 6.0f;
+	const float TurnRate = FMath::IsFinite(MaxFramingTurnRate) ? FMath::Max(MaxFramingTurnRate, 1.0f) : 90.0f;
+	const float HeightSpeed = FMath::IsFinite(HeightInterpSpeed) ? FMath::Max(HeightInterpSpeed, 0.1f) : 4.0f;
+	const FRotator SmoothRotation = FMath::RInterpTo(InputRotation, BestRotation, SafeDeltaTime, RotationSpeed);
+	// 自动纠正限速，尤其在目标从头顶/身后掠过时避免镜头瞬间翻转
+	PC->SetControlRotation(FMath::RInterpConstantTo(InputRotation, SmoothRotation, SafeDeltaTime, TurnRate));
+	TargetOffset = ConstrainHeight(FMath::VInterpTo(CurrentOffset, BestOffset, SafeDeltaTime, HeightSpeed));
 	Super::UpdateDesiredArmLocation(bDoTrace, false, false, DeltaTime);
 }

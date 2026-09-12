@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -23,6 +23,7 @@
 
 namespace
 {
+	// 创建只阻挡可见性查询的测试盒体，供目标遮挡测试使用
 	AActor* SpawnTargetLockVisibilityBlocker(UWorld* World, const FVector& Location)
 	{
 		if (!World)
@@ -51,13 +52,13 @@ namespace
 		Box->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 		Box->RegisterComponent();
 		// Actor 在没有 RootComponent 时 Spawn，随后才挂入 Box；显式设置世界位置，
-		// 避免测试遮挡体仍停留在原点而没有进入目标锁定射线。
+		// 避免测试遮挡体仍停留在原点而没有进入目标锁定射线
 		Box->SetWorldLocation(Location);
 		return Blocker;
 	}
 }
 
-// 属性测试覆盖最大生命值/当前生命值钳制，以及死亡事件只允许完成一次。
+// 属性测试覆盖最大生命值/当前生命值钳制，以及死亡事件只允许完成一次
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAttributeClampingTest,
 	"ZCase.Attributes.Clamping",
@@ -76,7 +77,7 @@ bool FZCAttributeClampingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 伤害测试确认负伤害不治疗、致死伤害被截断，并且死亡后的重复伤害不会生效。
+// 伤害测试确认负伤害不治疗、致死伤害被截断，并且死亡后的重复伤害不会生效
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAttributeDamageAndDeathTest,
 	"ZCase.Attributes.DamageAndDeathAreIdempotent",
@@ -102,7 +103,7 @@ bool FZCAttributeDamageAndDeathTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 敌人伤害生命周期测试覆盖非致命受击、首次死亡，以及死亡后的不可伤害和碰撞策略。
+// 敌人伤害生命周期测试覆盖非致命受击、首次死亡，以及死亡后的不可伤害和碰撞策略
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCEnemyDamageLifecycleTest,
 	"ZCase.Enemy.DamageLifecycle",
@@ -175,7 +176,7 @@ bool FZCEnemyDamageLifecycleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 玩家非致死受击应恢复战斗；首次死亡则清理锁定并进入不可逆的终止状态。
+// 玩家非致死受击应恢复战斗；首次死亡则清理锁定并进入不可逆的终止状态
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCPlayerDamageLifecycleTest,
 	"ZCase.Player.DamageLifecycle",
@@ -278,7 +279,7 @@ bool FZCPlayerDamageLifecycleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 命中窗口测试确认攻击生命周期、窗口开关和同一攻击内的目标去重边界。
+// 命中窗口测试确认攻击生命周期、窗口开关和同一攻击内的目标去重边界
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCCombatHitWindowTest,
 	"ZCase.Combat.HitWindowAndDeduplication",
@@ -286,7 +287,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 {
-	// 为命中窗口测试提供最小的瞬态武器和两个 socket，避免把“缺少配置”的安全失败与正常去重逻辑混在一起。
+	// 为命中窗口测试提供最小的瞬态武器和两个 socket，避免把“缺少配置”的安全失败与正常去重逻辑混在一起
 	AActor* Owner = NewObject<AActor>();
 	UStaticMeshComponent* SwordMesh = NewObject<UStaticMeshComponent>(Owner);
 	UStaticMesh* RuntimeMesh = NewObject<UStaticMesh>(Owner);
@@ -325,13 +326,13 @@ bool FZCCombatHitWindowTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A closed trace window rejects hits"), Combat->TryApplyHit(Hit, 10.0f).bRegistered);
 
 	Combat->StartAttack();
-	// 新攻击必须重置去重集合，使同一目标可以再次受击。
+	// 新攻击必须重置去重集合，使同一目标可以再次受击
 	Combat->BeginTrace();
 	TestTrue(TEXT("A new attack clears the hit set"), Combat->TryApplyHit(Hit, 10.0f).bRegistered);
 	return true;
 }
 
-// 命中结算测试覆盖实际扣血、致死转移和跨攻击重新登记。
+// 命中结算测试覆盖实际扣血、致死转移和跨攻击重新登记
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCCombatHitResolutionTest,
 	"ZCase.Combat.HitResolution",
@@ -392,7 +393,7 @@ bool FZCCombatHitResolutionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 受击锁定保留可恢复性，而死亡禁用必须拒绝所有陈旧恢复调用。
+// 受击锁定保留可恢复性，而死亡禁用必须拒绝所有陈旧恢复调用
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCCombatAvailabilityTest,
 	"ZCase.Combat.ReactionAvailability",
@@ -428,7 +429,7 @@ bool FZCCombatAvailabilityTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 武器轨迹采样测试保护配置钳制、采样数量，以及上一帧/当前帧的剑身端点插值。
+// 武器轨迹采样测试保护配置钳制、采样数量，以及上一帧/当前帧的剑身端点插值
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCCombatTraceSamplingTest,
 	"ZCase.Combat.TraceSampling",
@@ -458,7 +459,7 @@ bool FZCCombatTraceSamplingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 输入策略测试固定 Sheathed -> Draw、Equipped -> Attack，其余过渡态忽略输入。
+// 输入策略测试固定 Sheathed -> Draw、Equipped -> Attack，其余过渡态忽略输入
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponInputPolicyTest,
 	"ZCase.Combat.WeaponInputPolicy",
@@ -489,7 +490,7 @@ bool FZCWeaponInputPolicyTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 动画基础姿势跟随实际挂点切换，不应等待 Drawing/Sheathing Montage 的结束回调。
+// 动画基础姿势跟随实际挂点切换，不应等待 Drawing/Sheathing Montage 的结束回调
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponAnimationPoseStateTest,
 	"ZCase.Combat.WeaponAnimationPoseState",
@@ -517,7 +518,7 @@ bool FZCWeaponAnimationPoseStateTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 蒙太奇配置测试保护 ABP 使用的 FullBody 插槽，以及装备切换发生在动画结束前。
+// 蒙太奇配置测试保护 ABP 使用的 FullBody 插槽，以及装备切换发生在动画结束前
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCWeaponMontageConfigurationTest,
 	"ZCase.Combat.WeaponMontageConfiguration",
@@ -585,7 +586,7 @@ bool FZCWeaponMontageConfigurationTest::RunTest(const FString& Parameters)
 
 	const float DrawDelay = UZCCombatComponent::CalculateAttachmentDelay(1.24f, 0.35f);
 	const float SheathDelay = UZCCombatComponent::CalculateAttachmentDelay(0.92f, 0.70f);
-	// 默认 35% 拔刀、70% 收刀时刻对应可复现的 Timer 延迟。
+	// 默认 35% 拔刀、70% 收刀时刻对应可复现的 Timer 延迟
 	TestTrue(TEXT("Draw attachment switches before the montage ends"), DrawDelay > 0.0f && DrawDelay < 1.24f);
 	TestTrue(TEXT("Sheath attachment switches before the montage ends"), SheathDelay > 0.0f && SheathDelay < 0.92f);
 	TestEqual(TEXT("Draw attachment default time is stable"), DrawDelay, 0.434f, 0.001f);
@@ -593,7 +594,7 @@ bool FZCWeaponMontageConfigurationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 目标锁定生命周期测试覆盖接口校验、替换/清除和目标销毁后的自动清理。
+// 目标锁定生命周期测试覆盖接口校验、替换/清除和目标销毁后的自动清理
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockLifecycleTest,
 	"ZCase.TargetLock.ValidationAndLifecycle",
@@ -629,7 +630,7 @@ bool FZCTargetLockLifecycleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 目标获取测试覆盖默认范围/角度、屏幕中心角度优先、可见性和失败时的幂等性。
+// 目标获取测试覆盖默认范围/角度、屏幕中心角度优先、可见性和失败时的幂等性
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockAcquisitionTest,
 	"ZCase.TargetLock.AcquireBestTarget",
@@ -680,7 +681,7 @@ bool FZCTargetLockAcquisitionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Acquiring a target enables component ticking"), TargetLock->IsComponentTickEnabled());
 
 	// 获取失败不应破坏当前锁定；输入层只会在无目标时调用 AcquireBestTarget，但
-	// 组件 API 也应保持这个失败路径的幂等性。
+	// 组件 API 也应保持这个失败路径的幂等性
 	TestFalse(TEXT("A zero view direction rejects acquisition"), TargetLock->AcquireBestTarget(ViewLocation, FVector::ZeroVector));
 	TestEqual(
 		TEXT("A failed acquisition preserves the current target"),
@@ -699,7 +700,7 @@ bool FZCTargetLockAcquisitionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 目标锁定生命周期测试覆盖相机视点遮挡宽限、超距清除和无目标停 Tick。
+// 目标锁定生命周期测试覆盖相机视点遮挡宽限、超距清除和无目标停 Tick
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockLossConditionsTest,
 	"ZCase.TargetLock.LossConditions",
@@ -728,7 +729,7 @@ bool FZCTargetLockLossConditionsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The lifecycle fixture can be locked"), TargetLock->SetTarget(Target));
 	TestTrue(TEXT("A locked component ticks"), TargetLock->IsComponentTickEnabled());
 
-	// 失锁距离优先于遮挡判定。
+	// 失锁距离优先于遮挡判定
 	Target->SetActorLocation(FVector(3500.0f, 0.0f, 0.0f));
 	TargetLock->TickComponent(0.01f, LEVELTICK_All, nullptr);
 	TestNull(TEXT("A target beyond 3000 cm is cleared"), TargetLock->GetCurrentTarget());
@@ -753,7 +754,7 @@ bool FZCTargetLockLossConditionsTest::RunTest(const FString& Parameters)
 		TargetLock->GetCurrentTarget(),
 		static_cast<AActor*>(Target));
 
-	// 恢复可见必须清零遮挡累计；随后再次遮挡 0.5 秒仍应保持锁定。
+	// 恢复可见必须清零遮挡累计；随后再次遮挡 0.5 秒仍应保持锁定
 	Blocker->Destroy();
 	TargetLock->TickComponent(0.01f, LEVELTICK_All, nullptr);
 	VisibilityHit = FHitResult();
@@ -788,7 +789,7 @@ bool FZCTargetLockLossConditionsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 锁定移动基础测试覆盖角色朝向模式，以及 AnimBP 需要的锁定布尔和局部方向角。
+// 锁定移动基础测试覆盖角色朝向模式，以及 AnimBP 需要的锁定布尔和局部方向角
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCTargetLockAnimationDataTest,
 	"ZCase.TargetLock.AnimationData",
@@ -824,7 +825,7 @@ bool FZCTargetLockAnimationDataTest::RunTest(const FString& Parameters)
 		TEXT("Locking disables orient-to-movement"),
 		Player->GetCharacterMovement()->bOrientRotationToMovement);
 
-	// 默认 720 度/秒在一秒内应完成 90 度转向，并且只修改水平 Yaw。
+	// 默认 720 度/秒在一秒内应完成 90 度转向，并且只修改水平 Yaw
 	Player->Tick(1.0f);
 	TestEqual(TEXT("Locked facing keeps pitch at zero"), Player->GetActorRotation().Pitch, 0.0, 0.01);
 	TestEqual(TEXT("Locked facing keeps roll at zero"), Player->GetActorRotation().Roll, 0.0, 0.01);
@@ -851,7 +852,7 @@ bool FZCTargetLockAnimationDataTest::RunTest(const FString& Parameters)
 		42.0f,
 		0.01f);
 
-	// UAnimInstance 声明了 Within=SkeletalMeshComponent，测试实例必须使用角色网格作为 Outer。
+	// UAnimInstance 声明了 Within=SkeletalMeshComponent，测试实例必须使用角色网格作为 Outer
 	UZCAnimInst* AnimInstance = NewObject<UZCAnimInst>(Player->GetMesh());
 	AnimInstance->PlayerRef = Player;
 	AnimInstance->MoveComp = Player->GetCharacterMovement();
@@ -870,4 +871,4 @@ bool FZCTargetLockAnimationDataTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS
+#endif // 开发自动化测试代码

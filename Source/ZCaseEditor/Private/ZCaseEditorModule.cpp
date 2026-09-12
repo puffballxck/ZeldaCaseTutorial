@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "Modules/ModuleManager.h"
 
@@ -20,6 +20,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogZCaseEditor, Log, All);
 
 namespace
 {
+// 显示批处理结果，并根据完成状态设置通知图标
 void ShowNotification(const FText& Message, const SNotificationItem::ECompletionState State)
 {
 	FNotificationInfo Info(Message);
@@ -31,6 +32,7 @@ void ShowNotification(const FText& Message, const SNotificationItem::ECompletion
 	}
 }
 
+// 从内容浏览器当前选择中筛选并加载动画序列
 TArray<UAnimSequence*> GetSelectedAnimationSequences()
 {
 	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
@@ -50,15 +52,18 @@ TArray<UAnimSequence*> GetSelectedAnimationSequences()
 }
 }
 
+// 注册编辑器动画修正菜单并汇总批量处理结果
 class FZCaseEditorModule final : public IModuleInterface
 {
 public:
+	// 等待工具菜单初始化后注册自定义入口
 	virtual void StartupModule() override
 	{
 		UToolMenus::RegisterStartupCallback(
 			FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FZCaseEditorModule::RegisterMenus));
 	}
 
+	// 卸载模块时移除回调和菜单，避免残留对象引用
 	virtual void ShutdownModule() override
 	{
 		UToolMenus::UnRegisterStartupCallback(this);
@@ -66,6 +71,7 @@ public:
 	}
 
 private:
+	// 在工具菜单中添加所选动画根轨道修正操作
 	void RegisterMenus()
 	{
 		FToolMenuOwnerScoped OwnerScoped(this);
@@ -82,6 +88,7 @@ private:
 			FUIAction(FExecuteAction::CreateRaw(this, &FZCaseEditorModule::FixSelectedAnimationRoots)));
 	}
 
+	// 确认选择后逐个修正动画，支持取消并保留未保存状态
 	void FixSelectedAnimationRoots()
 	{
 		const TArray<UAnimSequence*> Animations = GetSelectedAnimationSequences();

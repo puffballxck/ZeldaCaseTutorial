@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "UI/ZCTargetLockIndicatorWidget.h"
 
@@ -23,8 +23,8 @@ void UZCTargetLockIndicatorWidget::SetTarget(AActor* NewTarget)
 	}
 
 	Target = NewTarget;
-	// 先隐藏绘制内容并初始化尺寸，防止首次显示时闪出全屏默认布局。
-	// 暂时无法投影时仍保留可 Tick 的布局。
+	// 先隐藏绘制内容并初始化尺寸，防止首次显示时闪出全屏默认布局
+	// 暂时无法投影时仍保留可 Tick 的布局
 	SetRenderOpacity(0.0f);
 	SetVisibility(ESlateVisibility::HitTestInvisible);
 	SetPositionInViewport(FVector2D::ZeroVector, false);
@@ -49,8 +49,8 @@ void UZCTargetLockIndicatorWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	// The viewport position represents the arrow center; the Blueprint image
-	// remains responsible for its visual brush and final 48x48 presentation.
+	// 视口位置表示箭头中心，蓝图图片
+	// 继续负责视觉 Brush 和最终 48x48 的呈现
 	SetAlignmentInViewport(FVector2D(0.5f, 0.5f));
 	ClearTarget();
 }
@@ -67,8 +67,8 @@ void UZCTargetLockIndicatorWidget::NativeTick(const FGeometry& MyGeometry, const
 
 	if (!UpdateIndicatorPosition())
 	{
-		// 离屏/短暂投影失败不是目标失效。保留引用和 Tick，并把透明控件
-		// 留在视口内，避免 Slate 裁剪掉屏幕外控件后停止其更新。
+		// 离屏/短暂投影失败不是目标失效保留引用和 Tick，并把透明控件
+		// 留在视口内，避免 Slate 裁剪掉屏幕外控件后停止其更新
 		SetRenderOpacity(0.0f);
 		SetPositionInViewport(GetDesiredSize() * 0.5f, false);
 		return;
@@ -132,8 +132,8 @@ void UZCTargetLockIndicatorWidget::InitializeViewportLayout()
 	if (FMath::IsFinite(DesiredSize.X) && FMath::IsFinite(DesiredSize.Y)
 		&& DesiredSize.X > 0.0f && DesiredSize.Y > 0.0f)
 	{
-		// Preserve the size authored by WBP_TargetLockIndicator while replacing
-		// AddToPlayerScreen's initial full-screen slot with an auto-sized slot.
+		// 替换布局时保留 WBP_TargetLockIndicator 设定的尺寸
+		// 用自动尺寸 Slot 替代 AddToPlayerScreen 初始创建的全屏 Slot
 		SetDesiredSizeInViewport(DesiredSize);
 	}
 }
@@ -157,9 +157,9 @@ void UZCTargetLockIndicatorWidget::SetIndicatorTickEnabled(const bool bEnabled)
 	}
 
 	bIndicatorTickEnabled = bEnabled;
-	// UE 5.8 UUserWidget recomputes the Slate tick state from this public
-	// native/script tick flag. The class metadata disables the always-on native
-	// path; toggling the flag lets the indicator tick only while it has a target.
+	// UE 5.8 的 UUserWidget 会根据这个公开的
+	// 原生或脚本 Tick 标记重新计算 Slate Tick 状态，类元数据关闭始终开启的原生
+	// 路径，切换该标记后指示器只在持有目标时 Tick
 	bHasScriptImplementedTick = bEnabled;
 	UpdateCanTick();
 }

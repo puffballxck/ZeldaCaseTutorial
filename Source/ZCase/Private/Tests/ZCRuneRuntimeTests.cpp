@@ -1,10 +1,11 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 在项目设置的描述页面填写版权声明
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Gameplay/ZCRuneRuntimeComponent.h"
 #include "Misc/AutomationTest.h"
 
+// 验证选择与激活分离，并拒绝重复选择和非法枚举值
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCRuneRuntimeSelectionTest,
 	"ZCase.Runes.Runtime.Selection",
@@ -25,6 +26,7 @@ bool FZCRuneRuntimeSelectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 验证重复切换会取消激活，同时保留当前选择
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCRuneRuntimeToggleTest,
 	"ZCase.Runes.Runtime.Toggle",
@@ -44,6 +46,7 @@ bool FZCRuneRuntimeToggleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 验证更换选择会取消旧激活，始终只有一个符文处于激活状态
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCRuneRuntimeSwitchingTest,
 	"ZCase.Runes.Runtime.SwitchingIsExclusive",
@@ -66,6 +69,7 @@ bool FZCRuneRuntimeSwitchingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 验证取消操作保留选择，并在重复取消时返回无变化
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCRuneRuntimeCancelAllTest,
 	"ZCase.Runes.Runtime.CancelAll",
@@ -84,4 +88,4 @@ bool FZCRuneRuntimeCancelAllTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS
+#endif // 开发自动化测试代码

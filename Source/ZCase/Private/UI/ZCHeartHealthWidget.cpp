@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "UI/ZCHeartHealthWidget.h"
 
@@ -53,8 +53,8 @@ void UZCHeartHealthWidget::SetAttributes(UZCAttributeComponent* InAttributes)
 		BoundAttributes = InAttributes;
 	}
 
-	// AddUniqueDynamic also repairs a binding after NativeDestruct without duplicating it
-	// when the same component is supplied repeatedly.
+	// AddUniqueDynamic 会在 NativeDestruct 后修复绑定，同时不会重复添加
+	// 即使重复传入同一个组件
 	BindToAttributes();
 	EnsureWidgetTree();
 	ResetFlashAnimations();
@@ -382,7 +382,7 @@ int32 UZCHeartHealthWidget::CalculateDisplayedHalfHearts(const float Health, con
 	}
 
 	const float Ratio = FMath::Clamp(Health / MaxHealth, 0.0f, 1.0f);
-	// The small bias keeps values such as (100 - 100 / 6) on the intended fifth half.
+	// 微小偏置保证类似（100 - 100 / 6）的数值落在预期的第五个半心
 	const int32 HalfHearts = FMath::FloorToInt(Ratio * static_cast<float>(HalfHeartCount) + 0.0005f);
 	return FMath::Clamp(HalfHearts, 0, HalfHeartCount);
 }

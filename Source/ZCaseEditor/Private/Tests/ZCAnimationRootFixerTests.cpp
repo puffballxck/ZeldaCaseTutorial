@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -9,6 +9,7 @@
 #include "Animation/Skeleton.h"
 #include "ZCAnimationRootFixer.h"
 
+// 验证首帧目标、平移与相对变换保留，以及重复修正的幂等性
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAnimationRootFixBuildKeysTest,
 	"ZCase.Editor.AnimationRootFix.BuildCorrectedKeys",
@@ -54,6 +55,7 @@ bool FZCAnimationRootFixBuildKeysTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 验证首帧含零缩放分量时拒绝修正并提供错误说明
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAnimationRootFixRejectsZeroScaleTest,
 	"ZCase.Editor.AnimationRootFix.RejectsZeroScale",
@@ -73,6 +75,7 @@ bool FZCAnimationRootFixRejectsZeroScaleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 在真实动画的瞬态副本上验证根轨道修正，不改动源资产
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FZCAnimationRootFixRealAssetTest,
 	"ZCase.Editor.AnimationRootFix.RealLinkAssetTransientCopy",

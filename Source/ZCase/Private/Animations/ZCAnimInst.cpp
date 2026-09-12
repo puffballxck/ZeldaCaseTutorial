@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "Animations/ZCAnimInst.h"
 #include "Combat/ZCCombatComponent.h"
@@ -53,7 +53,7 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	bShouldMove = !bIsFalling && GroundSpeed >5.0f && MoveComp->GetCurrentAcceleration().Size()>0;
 	bIsGliding = PlayerRef->CurrentMT == EMovementTypes::MT_Gliding;
 	bReadyToThrow = PlayerRef->bReadyToThrow;
-	// 拔刀完成后才进入装备姿势；攻击和收刀期间继续保持该姿势，直到收刀结束。
+	// 拔刀完成后才进入装备姿势；攻击和收刀期间继续保持该姿势，直到收刀结束
 	bWeaponEquipped = PlayerRef->Combat && PlayerRef->Combat->IsWeaponEquippedForAnimation();
 	bGuarding = PlayerRef->Combat && PlayerRef->Combat->IsGuardPoseActive();
 	LockOnDirection = bIsTargetLocked

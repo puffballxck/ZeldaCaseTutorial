@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "AI/ZCBTTask_Attack.h"
 
@@ -40,9 +40,9 @@ EBTNodeResult::Type UZCBTTask_Attack::ExecuteTask(
 	bPendingInterrupted = false;
 	Combat->OnAttackEnded.AddUniqueDynamic(this, &UZCBTTask_Attack::HandleAttackEnded);
 
-	// Combat can broadcast synchronously when Montage_Play fails. Keep the
-	// callback in a pending slot until ExecuteTask has returned; calling
-	// FinishLatentTask from this stack would re-enter the behavior tree.
+	// Montage_Play 失败时 Combat 可能同步广播结束事件，因此先把回调放入待处理槽
+	// 等 ExecuteTask 返回后再处理，避免直接调用
+	// FinishLatentTask 导致行为树从当前调用栈重入
 	bExecuting = true;
 	const bool bStarted = Enemy->TryAttack(Target);
 	bExecuting = false;
@@ -73,7 +73,7 @@ EBTNodeResult::Type UZCBTTask_Attack::AbortTask(
 	ClearActiveTask();
 	if (Combat)
 	{
-		// Unbind first; CancelAttack may broadcast its end synchronously.
+		// 先解除绑定，CancelAttack 可能同步广播结束事件
 		Combat->CancelAttack();
 	}
 	return Super::AbortTask(OwnerComp, NodeMemory);

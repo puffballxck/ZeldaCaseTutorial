@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "ZCAnimationRootFixer.h"
 
@@ -11,12 +11,14 @@
 
 namespace
 {
+// 判断缩放分量是否接近零，避免后续比例计算除零
 bool IsNearlyZeroScaleComponent(const double Value, const float Tolerance)
 {
 	return FMath::Abs(Value) <= Tolerance;
 }
 }
 
+// 以首帧建立统一修正量，不改变关键帧数量和位移
 bool FZCAnimationRootFixer::BuildCorrectedRootKeys(
 	const TArray<FTransform>& InputKeys,
 	const FZCAnimationRootFixSettings& Settings,
@@ -42,6 +44,7 @@ bool FZCAnimationRootFixer::BuildCorrectedRootKeys(
 		return false;
 	}
 
+	// 分别按三个轴计算目标缩放与原始缩放的比例
 	const FVector ScaleRatio(
 		Settings.TargetFirstKeyScale.X / FirstScale.X,
 		Settings.TargetFirstKeyScale.Y / FirstScale.Y,
@@ -49,6 +52,7 @@ bool FZCAnimationRootFixer::BuildCorrectedRootKeys(
 
 	const FQuat FirstRotation = FirstKey.GetRotation().GetNormalized();
 	const FQuat TargetRotation = Settings.TargetFirstKeyRotation.Quaternion().GetNormalized();
+	// 将统一旋转修正左乘到每个关键帧，保留帧间相对旋转
 	const FQuat RotationCorrection = (TargetRotation * FirstRotation.Inverse()).GetNormalized();
 
 	OutKeys.Reserve(InputKeys.Num());
@@ -66,6 +70,7 @@ bool FZCAnimationRootFixer::BuildCorrectedRootKeys(
 	return true;
 }
 
+// 验证骨架和根轨道后写回修正结果，已匹配时直接返回
 EZCAnimationRootFixResult FZCAnimationRootFixer::ApplyToAnimation(
 	UAnimSequence* Animation,
 	const FZCAnimationRootFixSettings& Settings,
@@ -109,6 +114,7 @@ EZCAnimationRootFixResult FZCAnimationRootFixer::ApplyToAnimation(
 		return EZCAnimationRootFixResult::InvalidRootScale;
 	}
 
+	// 修正量由首帧决定，首帧已匹配即可避免重复写入
 	const FTransform& ExistingFirstKey = ExistingKeys[0];
 	const FTransform& CorrectedFirstKey = CorrectedKeys[0];
 	const bool bScaleAlreadyCorrect = ExistingFirstKey.GetScale3D().Equals(
@@ -135,6 +141,7 @@ EZCAnimationRootFixResult FZCAnimationRootFixer::ApplyToAnimation(
 		ScaleKeys.Add(FVector3f(CorrectedKey.GetScale3D()));
 	}
 
+	// 通过控制器写入以支持撤销，保存仍由调用方决定
 	IAnimationDataController& Controller = Animation->GetController();
 	if (!Controller.SetBoneTrackKeys(RootBoneName, PositionKeys, RotationKeys, ScaleKeys, true))
 	{
@@ -150,6 +157,7 @@ EZCAnimationRootFixResult FZCAnimationRootFixer::ApplyToAnimation(
 	return EZCAnimationRootFixResult::Applied;
 }
 
+// 输出与结果枚举对应的日志文本
 const TCHAR* FZCAnimationRootFixer::LexToString(const EZCAnimationRootFixResult Result)
 {
 	switch (Result)

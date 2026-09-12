@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "Animations/ZCAnimNotifyState_WeaponTrace.h"
 
@@ -14,7 +14,7 @@ void UZCAnimNotifyState_WeaponTrace::NotifyBegin(
 {
 	Super::NotifyBegin(MeshComp, Animation, TotalDuration, EventReference);
 
-	// 动画网格是稳定入口；组件自行校验攻击生命周期、SwordMesh 和 Trace socket。
+	// 动画网格是稳定入口；组件自行校验攻击生命周期、SwordMesh 和 Trace socket
 	AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (UZCCombatComponent* Combat = Owner ? Owner->FindComponentByClass<UZCCombatComponent>() : nullptr)
 	{
@@ -29,7 +29,7 @@ void UZCAnimNotifyState_WeaponTrace::NotifyEnd(
 {
 	Super::NotifyEnd(MeshComp, Animation, EventReference);
 
-	// Notify 被正常结束或动画被打断时都走同一个关闭入口，保证 Tick 不会泄漏到窗口之外。
+	// Notify 被正常结束或动画被打断时都走同一个关闭入口，保证 Tick 不会泄漏到窗口之外
 	AActor* Owner = MeshComp ? MeshComp->GetOwner() : nullptr;
 	if (UZCCombatComponent* Combat = Owner ? Owner->FindComponentByClass<UZCCombatComponent>() : nullptr)
 	{

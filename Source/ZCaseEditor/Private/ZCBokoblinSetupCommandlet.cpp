@@ -44,9 +44,11 @@
 
 namespace
 {
+	// 演示动画与行为树资产的固定输出目录
 	const FString EnemyFolder = TEXT("/Game/_Game/Animations/Enemy/Bokoblin/");
 	const FString AIFolder = TEXT("/Game/_Game/AI/Bokoblin/");
 
+	// 加载必需资产，缺失时立即报告配置错误
 	template<class T> T* LoadRequired(const FString& Path)
 	{
 		T* Result = LoadObject<T>(nullptr, *Path);
@@ -54,6 +56,7 @@ namespace
 		return Result;
 	}
 
+	// 按脚本路径加载游戏模块中的原生类
 	UClass* RuntimeClass(const TCHAR* Name)
 	{
 		UClass* Result = LoadObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/ZCase.%s"), Name));
@@ -61,6 +64,7 @@ namespace
 		return Result;
 	}
 
+	// 通过反射导入属性文本，写入前记录对象修改
 	void Set(UObject* Object, const FName Name, const FString& Value)
 	{
 		FProperty* Property = Object->GetClass()->FindPropertyByName(Name);
@@ -70,6 +74,7 @@ namespace
 			TEXT("Cannot set %s.%s = %s"), *Object->GetName(), *Name.ToString(), *Value);
 	}
 
+	// 标记资产包变更并保存，失败时中止配置
 	void Save(UObject* Asset)
 	{
 		UPackage* Package = Asset->GetOutermost();
@@ -81,6 +86,7 @@ namespace
 		UE_LOG(LogTemp, Display, TEXT("Bokoblin setup saved %s"), *Filename);
 	}
 
+	// 创建支持撤销的独立资产并通知资产注册表
 	template<class T> T* NewAsset(const FString& Path)
 	{
 		UPackage* Package = CreatePackage(*Path);
@@ -89,11 +95,12 @@ namespace
 		return Asset;
 	}
 
+	// 复用现有行为树，否则创建目标判断驱动的战斗与巡逻分支
 	UBehaviorTree* BuildTree()
 	{
 		if (UBehaviorTree* Existing = LoadObject<UBehaviorTree>(nullptr, *(AIFolder + TEXT("BT_Bokoblin"))))
 		{
-			return Existing; // Preserve subsequent hand edits when setup is run again.
+			return Existing; // 再次执行配置时保留后续手动编辑
 		}
 		UBlackboardData* BB = LoadObject<UBlackboardData>(nullptr, *(AIFolder + TEXT("BB_Bokoblin")));
 		if (!BB) BB = NewAsset<UBlackboardData>(AIFolder + TEXT("BB_Bokoblin"));
@@ -159,7 +166,7 @@ namespace
 		Graph->GetSchema()->CreateDefaultNodesForGraph(*Graph);
 		Graph->OnCreated();
 		Graph->Initialize();
-		// AutoArrange requires Slate node widgets, which a commandlet does not own.
+		// AutoArrange 依赖 Slate 节点控件，命令行工具中改为手动布局
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
 			auto* BTNode = Cast<UBehaviorTreeGraphNode>(Node);
@@ -176,9 +183,8 @@ namespace
 			}
 		}
 		Graph->UpdateAsset();
-		// UpdateAsset rebuilds the runtime tree from graph nodes. Recreate the two
-		// branch decorators afterward so their serialized references are owned by
-		// the BehaviorTree package even in commandlet mode.
+		// UpdateAsset 会从图节点重建运行时行为树，因此随后重建两个分支装饰器
+		// 确保命令行模式下序列化引用也归属于行为树资产包
 		for (int32 Branch = 0; Branch < Root->Children.Num(); ++Branch)
 		{
 			auto* Decorator = NewObject<UBTDecorator_Blackboard>(Tree,
@@ -197,6 +203,7 @@ namespace
 		return Tree;
 	}
 
+	// 复用现有攻击蒙太奇，否则从拳击序列创建并配置命中窗口
 	UAnimMontage* BuildAttack()
 	{
 		const FString Path = EnemyFolder + TEXT("Animation/Montage/AM_Bokoblin_Attack_01");
@@ -214,8 +221,8 @@ namespace
 		Montage->BlendIn.SetBlendTime(0.1f);
 		Montage->BlendOut.SetBlendTime(0.15f);
 		UAnimationBlueprintLibrary::AddAnimationNotifyTrack(Montage, TEXT("Damage"));
-		// Raw right-wrist sampling puts the forward strike at 0.80-0.92 s in this 1.76 s clip.
-		// Kept on the montage so artists can tune the contact frames directly.
+		// 右腕原始采样表明，这段 1.76 秒动画的前向出拳发生在 0.80 至 0.92 秒
+		// 将命中窗口保留在蒙太奇中，方便美术直接调整接触帧
 		const float Start = 0.80f;
 		const float Duration = 0.12f;
 		check(UAnimationBlueprintLibrary::AddAnimationNotifyStateEvent(Montage, TEXT("Damage"), Start, Duration,
@@ -224,6 +231,7 @@ namespace
 		return Montage;
 	}
 
+	// 沿右腕父骨链采样并转换到角色空间，用于确定出拳命中时段
 	void InspectPunch()
 	{
 		auto* Sequence = LoadRequired<UAnimSequence>(EnemyFolder + TEXT("Animation/00_Combat/01_Attack/Unarmed/Enemy_Bokoblin-AniArmature_Attack_Punch_R"));
@@ -243,6 +251,7 @@ namespace
 		}
 	}
 
+	// 配置速度混合空间并将旧待机节点替换为受速度驱动的姿势输出
 	void BuildLocomotion()
 	{
 		const FString Path = EnemyFolder + TEXT("BS_Bokoblin_Locomotion");
@@ -308,6 +317,7 @@ namespace
 	}
 }
 
+// 启用编辑器命令行环境和控制台日志
 UZCBokoblinSetupCommandlet::UZCBokoblinSetupCommandlet()
 {
 	IsClient = false;
@@ -316,6 +326,7 @@ UZCBokoblinSetupCommandlet::UZCBokoblinSetupCommandlet()
 	LogToConsole = true;
 }
 
+// 按依赖顺序创建演示资产，再更新关卡实例和导航数据
 int32 UZCBokoblinSetupCommandlet::Main(const FString& Params)
 {
 	if (FParse::Param(*Params, TEXT("Inspect"))) { InspectPunch(); return 0; }
@@ -334,7 +345,7 @@ int32 UZCBokoblinSetupCommandlet::Main(const FString& Params)
 	FKismetEditorUtilities::CompileBlueprint(BP);
 	check(BP->Status != BS_Error);
 	Save(BP);
-	// Load after reparenting so placed actors use the compiled class and keep instance transforms.
+	// 更换父类并编译后再加载关卡，使已放置角色使用新类并保留实例变换
 	check(FEditorFileUtils::LoadMap(TEXT("/Game/_Game/Maps/TestLevel"), false, true));
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	check(World);
@@ -350,6 +361,7 @@ int32 UZCBokoblinSetupCommandlet::Main(const FString& Params)
 		++EnemyCount;
 	}
 	check(EnemyCount > 0);
+	// 复用导航边界体，缺失时按敌人位置范围向外扩展创建
 	ANavMeshBoundsVolume* NavVolume = nullptr;
 	for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It) { NavVolume = *It; break; }
 	if (!NavVolume)
@@ -381,6 +393,7 @@ int32 UZCBokoblinSetupCommandlet::Main(const FString& Params)
 		Nav->RequestRegistrationDeferred(*Recast);
 		Nav->Tick(0.0f);
 		Nav->Build();
+		// 等待导航构建完成，并单独保存外部导航数据包
 		for (TActorIterator<ANavigationData> It(World); It; ++It)
 		{
 			It->EnsureBuildCompletion();

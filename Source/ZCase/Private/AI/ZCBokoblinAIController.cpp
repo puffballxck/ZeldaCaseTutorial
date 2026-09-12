@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "AI/ZCBokoblinAIController.h"
 
@@ -74,7 +74,7 @@ void AZCBokoblinAIController::OnPossess(APawn* InPawn)
 		&AZCBokoblinAIController::UpdateHomeReturn, 0.2f, true);
 	if (SightConfig && PerceptionComponent)
 	{
-		// Reapply CDO/Blueprint overrides when a controller instance is possessed.
+		// 重新套用 CDO 与蓝图覆盖值，确保控制器实例被 Possess 后使用最新配置
 		SightConfig->SightRadius = FMath::Max(SightRadius, 0.0f);
 		SightConfig->LoseSightRadius = FMath::Max(LoseSightRadius, SightConfig->SightRadius);
 		SightConfig->PeripheralVisionAngleDegrees = FMath::Clamp(
@@ -107,8 +107,8 @@ void AZCBokoblinAIController::OnPossess(APawn* InPawn)
 			&AZCBokoblinAIController::HandleTargetPerceptionUpdated);
 		PerceptionComponent->SetActive(true);
 
-		// Sight may already know about a player before OnPossess binds the
-		// callback. Replay currently perceived actors after the blackboard exists.
+		// OnPossess 绑定回调前，感知系统可能已经记录玩家
+		// 黑板创建完成后，重新处理当前已感知的 Actor
 		TArray<AActor*> PerceivedActors;
 		PerceptionComponent->GetCurrentlyPerceivedActors(UAISense_Sight::StaticClass(), PerceivedActors);
 		for (AActor* PerceivedActor : PerceivedActors)
@@ -313,7 +313,7 @@ bool AZCBokoblinAIController::HasReachedHome() const
 	const float Radius = FMath::IsFinite(Enemy->ReturnAcceptanceRadius)
 		? FMath::Clamp(Enemy->ReturnAcceptanceRadius, 1.0f, MaxDistance * 0.5f) : 75.0f;
 	const FVector Offset = Enemy->GetActorLocation() - HomeLocation;
-	// 水平接近不能代表到家：避免在楼上、楼下或下落途中恢复索敌。
+	// 水平接近不能代表到家：避免在楼上、楼下或下落途中恢复索敌
 	return Offset.SizeSquared2D() <= FMath::Square(Radius)
 		&& FMath::Abs(Offset.Z) <= 75.0f;
 }
@@ -330,6 +330,11 @@ void AZCBokoblinAIController::UpdateHomeReturn()
 		HandleEnemyDeath(Enemy);
 		return;
 	}
+	if (Enemy->IsParryRecovering())
+	{
+		StopMovement();
+		return;
+	}
 	if (!bReturningHome)
 	{
 		const float MaxDistance = FMath::IsFinite(Enemy->MaxChaseDistance)
@@ -341,7 +346,7 @@ void AZCBokoblinAIController::UpdateHomeReturn()
 		return;
 	}
 
-	// 受击沿用原有 Combat 暂停状态；结束后重新请求路径，不改变生命值或给予无敌。
+	// 受击沿用原有 Combat 暂停状态；结束后重新请求路径，不改变生命值或给予无敌
 	if (Enemy->Combat && !Enemy->Combat->CanAcceptCombatInput())
 	{
 		StopMovement();
@@ -358,7 +363,7 @@ void AZCBokoblinAIController::UpdateHomeReturn()
 		return;
 	}
 
-	// 仅在请求结束/失败后重试，避免每次定时检查都重新寻路。不可达时保持返程态。
+	// 仅在请求结束/失败后重试，避免每次定时检查都重新寻路不可达时保持返程态
 	NextReturnAttemptTime = Now + 1.0;
 	FAIMoveRequest Request(HomeLocation);
 	Request.SetAcceptanceRadius(1.0f);
@@ -373,7 +378,7 @@ void AZCBokoblinAIController::UpdateHomeReturn()
 
 void AZCBokoblinAIController::BeginHomeReturn()
 {
-	// 先锁住返程态，再停止旧任务，避免同步 Abort/感知回调重新获取玩家。
+	// 先锁住返程态，再停止旧任务，避免同步 Abort/感知回调重新获取玩家
 	bReturningHome = true;
 	if (UBehaviorTreeComponent* Tree = Cast<UBehaviorTreeComponent>(GetBrainComponent()))
 	{
@@ -390,7 +395,7 @@ void AZCBokoblinAIController::BeginHomeReturn()
 		{
 			Enemy->Combat->CancelAttack();
 		}
-		// 清除 Focus 后按移动方向转身，使用追击速度跑回出生点。
+		// 清除 Focus 后按移动方向转身，使用追击速度跑回出生点
 		Enemy->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(Enemy->ChaseSpeed, 0.0f);
 	}
 	NextReturnAttemptTime = 0.0;
@@ -428,7 +433,7 @@ void AZCBokoblinAIController::FinishHomeReturn()
 	{
 		RunBehaviorTree(ControlledEnemy->BehaviorTree);
 	}
-	// 玩家可能始终在视野内，不会再产生“刚发现”事件，因此主动重查感知结果。
+	// 玩家可能始终在视野内，不会再产生“刚发现”事件，因此主动重查感知结果
 	AcquireVisiblePlayer();
 }
 

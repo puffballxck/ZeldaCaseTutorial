@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "UI/ZCInventoryWidget.h"
 
@@ -13,7 +13,7 @@
 
 TSharedRef<SWidget> UZCInventoryWidget::RebuildWidget()
 {
-	// Slate 获取根控件前建立原生布局，NativeConstruct 此时已经太晚。
+	// Slate 获取根控件前建立原生布局，NativeConstruct 此时已经太晚
 	if (!WidgetTree)
 	{
 		Initialize();

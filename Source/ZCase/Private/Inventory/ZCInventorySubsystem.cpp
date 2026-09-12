@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "Inventory/ZCInventorySubsystem.h"
 
@@ -10,6 +10,7 @@ void UZCInventorySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
+	// 子系统创建时只建立固定容量的空格，数据表必须经过显式校验后才生效
 	Capacity = 6;
 	Slots.Init(FZCInventorySlot{}, Capacity);
 	bInitialized = false;
@@ -28,6 +29,7 @@ void UZCInventorySubsystem::Deinitialize()
 
 bool UZCInventorySubsystem::InitializeFromDataTable(UDataTable* InItemDataTable, const int32 InCapacity)
 {
+	// 先在局部容器中完整校验，任何失败都不能破坏当前可用背包
 	if (!IsValid(InItemDataTable))
 	{
 		UE_LOG(LogZCInventory, Error, TEXT("InitializeFromDataTable failed: item data table is null."));
@@ -83,6 +85,7 @@ bool UZCInventorySubsystem::InitializeFromDataTable(UDataTable* InItemDataTable,
 		NewDefinitions.Add(Row->ItemId, *Row);
 	}
 
+	// 所有行通过校验后才一次性替换定义、容量和固定格数组
 	ItemDataTable = InItemDataTable;
 	ItemDefinitions = MoveTemp(NewDefinitions);
 	Capacity = InCapacity;
@@ -112,6 +115,7 @@ EZCInventoryResult UZCInventorySubsystem::TryAddItem(const int32 ItemId, const i
 	}
 
 	const int32 MaxStackSize = FMath::Max(1, ItemData->MaxStackSize);
+	// 使用工作副本先完成堆叠与空格分配，容量不足时保持原数组不变
 	TArray<FZCInventorySlot> WorkingSlots = Slots;
 	int32 Remaining = Amount;
 
@@ -153,6 +157,7 @@ EZCInventoryResult UZCInventorySubsystem::TryAddItem(const int32 ItemId, const i
 		return EZCInventoryResult::InventoryFull;
 	}
 
+	// 只有全部数量成功放入后才提交副本并广播一次变更
 	Slots = MoveTemp(WorkingSlots);
 	OnInventoryChanged.Broadcast();
 	return EZCInventoryResult::Success;
@@ -190,6 +195,7 @@ EZCInventoryResult UZCInventorySubsystem::TryRemoveItem(const int32 SlotIndex, c
 	MutableSlot.Amount -= Amount;
 	if (MutableSlot.Amount == 0)
 	{
+		// 数量归零时同时清除编号，恢复固定格的不变量
 		MutableSlot.Reset();
 	}
 
@@ -221,6 +227,7 @@ EZCInventoryResult UZCInventorySubsystem::MoveOrSwap(const int32 FromSlot, const
 
 	FZCInventorySlot& Source = Slots[FromSlot];
 	FZCInventorySlot& Destination = Slots[ToSlot];
+	// 目标格为空时表现为移动，目标格有物品时表现为交换
 	Swap(Source, Destination);
 
 	OnInventoryChanged.Broadcast();

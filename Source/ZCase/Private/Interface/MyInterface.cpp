@@ -1,6 +1,6 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 
 #include "Interface/MyInterface.h"
 
-// Add default functionality here for any IMyInterface functions that are not pure virtual.
+// 为 IMyInterface 中非纯虚函数提供默认实现

@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 
 #include "UI/ZCLayout.h"
@@ -9,6 +9,7 @@
 
 void UZCLayout::SetRuneMenuOpen_Implementation(const bool bOpen)
 {
+	// 优先使用显式 BindWidget，保留对旧 WidgetTree 的兼容回退
 	if (IsValid(WidgetSwitcher))
 	{
 		WidgetSwitcher->SetActiveWidgetIndex(bOpen ? 1 : 0);
@@ -31,6 +32,7 @@ void UZCLayout::SetRuneMenuOpen_Implementation(const bool bOpen)
 			continue;
 		}
 
+		// 找到第一个切换器后立即返回，避免误操作多个互不相关的菜单
 		Switcher->SetActiveWidgetIndex(bOpen ? 1 : 0);
 		return;
 	}

@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "Characters/ZCEnemyBase.h"
 
@@ -39,7 +39,7 @@ void AZCEnemyBase::BeginPlay()
 
 void AZCEnemyBase::ConfigureCombat()
 {
-	// 保留 Combat 的默认 Trace 配置；具体敌人可在派生类中提供骨骼/Socket 和 Montage。
+	// 保留 Combat 的默认 Trace 配置；具体敌人可在派生类中提供骨骼/Socket 和 Montage
 	if (Combat)
 	{
 		Combat->InitializeAttackSource(GetMesh(), GetMesh(), NAME_None, NAME_None);
@@ -68,7 +68,7 @@ float AZCEnemyBase::TakeDamage(
 		return 0.0f;
 	}
 
-	// Attribute 的同步广播可能触发外部回调；同一次伤害调用不允许递归扣血。
+	// Attribute 的同步广播可能触发外部回调；同一次伤害调用不允许递归扣血
 	TGuardValue<bool> DamageGuard(bDamageProcessing, true);
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	if (!Attributes || !FMath::IsFinite(EngineDamage) || EngineDamage <= 0.0f)
@@ -82,11 +82,11 @@ float AZCEnemyBase::TakeDamage(
 		return 0.0f;
 	}
 
-	// 致命伤害只进入死亡分支，避免先播放 Hit React 再立即被 Death 打断。
+	// 致命伤害只进入死亡分支，避免先播放 Hit React 再立即被 Death 打断
 	if (Result.bBecameDead)
 	{
 		// OnDeath 已在 ApplyDamage 内同步广播；这里保留幂等兜底，覆盖
-		// BeginPlay 前或外部直接调用属性组件的特殊路径。
+		// BeginPlay 前或外部直接调用属性组件的特殊路径
 		HandleDeath(this);
 	}
 	else
@@ -136,8 +136,8 @@ FVector AZCEnemyBase::GetTargetLockCameraLocation() const
 		}
 	}
 
-	// The camera anchor deliberately does not reuse the animated head/UI point;
-	// the capsule fallback keeps the lock focus stable when the chest socket is absent.
+	// 镜头锚点不会复用动画头部或 UI 锚点
+	// 缺少胸口 Socket 时使用胶囊体回退位置保持锁定焦点稳定
 	const UCapsuleComponent* Capsule = GetCapsuleComponent();
 	const float HeightOffset = Capsule
 		? Capsule->GetScaledCapsuleHalfHeight() * 0.5f
@@ -156,7 +156,7 @@ void AZCEnemyBase::PlayHitReact()
 	UAnimInstance* AnimInstance = EnemyMesh ? EnemyMesh->GetAnimInstance() : nullptr;
 	if (bHitReactActive && HitReactMontage && AnimInstance && AnimInstance->Montage_IsPlaying(HitReactMontage))
 	{
-		// 连续受击重置同一 Montage，不让旧结束回调提前恢复战斗。
+		// 连续受击重置同一 Montage，不让旧结束回调提前恢复战斗
 		AnimInstance->Montage_SetPosition(HitReactMontage, 0.0f);
 		return;
 	}
@@ -263,7 +263,7 @@ void AZCEnemyBase::HandleDeath(AActor* DeadActor)
 	if (Combat)
 	{
 		// 先终止 AI，再进入 Disabled；这样攻击任务先解绑自身 delegate，
-		// Combat 停止旧 Montage 时不会把行为树重新推进一轮。
+		// Combat 停止旧 Montage 时不会把行为树重新推进一轮
 		Combat->DisableCombat();
 	}
 
@@ -273,7 +273,7 @@ void AZCEnemyBase::HandleDeath(AActor* DeadActor)
 		Movement->DisableMovement();
 	}
 
-	// 第一版只忽略 Pawn，保留对世界的碰撞，避免倒地后穿地或位置失稳。
+	// 第一版只忽略 Pawn，保留对世界的碰撞，避免倒地后穿地或位置失稳
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
 		Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);

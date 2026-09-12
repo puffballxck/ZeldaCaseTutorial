@@ -1,6 +1,7 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "Characters/ZCCharBase.h"
+#include "Characters/ZCBokoblinEnemy.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Data/ZCPlayerController.h"
@@ -86,23 +87,23 @@ AZCCharBase::AZCCharBase()
 
 	PhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PhysicsHandle"));
 	RuneRuntime = CreateDefaultSubobject<UZCRuneRuntimeComponent>(TEXT("RuneRuntime"));
-	// 三个组件分别承载属性、战斗状态机和目标锁定生命周期，保持职责分离。
+	// 三个组件分别承载属性、战斗状态机和目标锁定生命周期，保持职责分离
 	Attributes = CreateDefaultSubobject<UZCAttributeComponent>(TEXT("Attributes"));
 	Combat = CreateDefaultSubobject<UZCCombatComponent>(TEXT("Combat"));
 	TargetLock = CreateDefaultSubobject<UZCTargetLockComponent>(TEXT("TargetLock"));
 
 	SwordMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SwordMesh"));
-	// 默认先挂在背部；Combat 初始化后会按状态机和动画时序切换到手部。
+	// 默认先挂在背部；Combat 初始化后会按状态机和动画时序切换到手部
 	SwordMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
 	SwordMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	SheathMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SheathMesh"));
-	// 剑鞘固定在背部挂点，剑本体负责在手部和剑鞘之间切换。
+	// 剑鞘固定在背部挂点，剑本体负责在手部和剑鞘之间切换
 	SheathMesh->SetupAttachment(GetMesh(), TEXT("WeaponSheath"));
 	SheathMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	ShieldMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShieldMesh"));
-	// 盾牌初始位于背部，拔刀完成后由 Combat 切换到左手挂点。
+	// 盾牌初始位于背部，拔刀完成后由 Combat 切换到左手挂点
 	ShieldMesh->SetupAttachment(GetMesh(), TEXT("ShieldBack"));
 	ShieldMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
@@ -122,8 +123,8 @@ AZCCharBase::AZCCharBase()
 		TEXT("/Game/_Game/Data/Inputs/IA_Attack.IA_Attack"));
 	AttackAction = AttackActionFinder.Object;
 
-	// Keep the independent unlock binding functional even when an older
-	// BP_Player has not yet serialized the newly added property.
+	// 即使旧版本
+	// BP_Player 尚未序列化新增属性，也要保持独立解除锁定接线可用
 	static ConstructorHelpers::FObjectFinder<UInputAction> TargetUnlockActionFinder(
 		TEXT("/Game/_Game/Data/Inputs/IA_TargetUnlock.IA_TargetUnlock"));
 	TargetUnlockAction = TargetUnlockActionFinder.Object;
@@ -144,8 +145,8 @@ void AZCCharBase::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// The independent action is optional until its asset is created and mapped
-	// in IMC_ZC. A BP_Player assignment remains authoritative.
+	// 独立动作在资源创建并接入前是可选的
+	// 在 IMC_ZC 中，BP_Player 上的配置仍是权威来源
 	if (!InventoryAction)
 	{
 		InventoryAction = LoadObject<UInputAction>(
@@ -160,14 +161,14 @@ void AZCCharBase::BeginPlay()
 
 	if (!GuardAction)
 	{
-		// Optional until the user creates and maps IA_Guard; a missing asset keeps
-		// the existing input setup valid and simply leaves the binding absent.
+		// 在用户创建并接入 IA_Guard 前保持可选，缺失资源仍会保留
+		// 现有输入配置有效，只是不添加该绑定
 		GuardAction = LoadObject<UInputAction>(
 			nullptr,
 			TEXT("/Game/_Game/Data/Inputs/IA_Guard.IA_Guard"));
 	}
 
-	// 输入接线只对本地玩家生效，但战斗状态仍必须为 AI、服务器和编辑器实例初始化。
+	// 输入接线只对本地玩家生效，但战斗状态仍必须为 AI、服务器和编辑器实例初始化
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
@@ -197,17 +198,17 @@ void AZCCharBase::BeginPlay()
 	if (TargetLock)
 	{
 		TargetLock->OnTargetChanged.AddUniqueDynamic(this, &AZCCharBase::HandleTargetChanged);
-		// 兼容 BeginPlay 前已经设置好的目标，确保移动组件模式与组件状态同步。
+		// 兼容 BeginPlay 前已经设置好的目标，确保移动组件模式与组件状态同步
 		HandleTargetChanged(nullptr, TargetLock->GetCurrentTarget());
 	}
 
 	if (Combat)
 	{
-		// BeginPlay 时把角色网格和三件装备交给 Combat，建立统一的挂点控制入口。
+		// BeginPlay 时把角色网格和三件装备交给 Combat，建立统一的挂点控制入口
 		Combat->InitializeEquipment(GetMesh(), SwordMesh, SheathMesh, ShieldMesh);
 	}
-	// InitializeEquipment resets transient combat state; resync an already
-	// selected target so pre-existing lock-on still enables automatic guard.
+	// InitializeEquipment 会重置瞬态战斗状态，因此重新同步已经
+	// 选中的目标，保证进入时已有的锁定仍能启用自动守卫
 	if (TargetLock)
 	{
 		HandleTargetChanged(nullptr, TargetLock->GetCurrentTarget());
@@ -250,8 +251,8 @@ void AZCCharBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	if (RuneRuntime)
 	{
-		// Let the normal transition path clean up spawned previews, held bombs,
-		// highlighted meshes, and presentation state before this pawn disappears.
+		// 让正常状态切换路径清理已生成的预览物、手持炸弹
+		// 高亮网格和表现状态，再让 Pawn 消失
 		RuneRuntime->CancelAll();
 		RuneRuntime->OnActiveRuneChanged.RemoveDynamic(this, &AZCCharBase::HandleActiveRuneChanged);
 	}
@@ -281,25 +282,32 @@ float AZCCharBase::TakeDamage(
 	const EZCDefenseHitResult DefenseResult = Combat
 		? Combat->ResolveIncomingDamage(DamageEvent, DamageCauser)
 		: EZCDefenseHitResult::None;
+	if (DefenseResult == EZCDefenseHitResult::Parried)
+	{
+		if (AZCBokoblinEnemy* Attacker = Cast<AZCBokoblinEnemy>(DamageCauser))
+		{
+			Attacker->HandleAttackParried();
+		}
+	}
 	if (DefenseResult == EZCDefenseHitResult::Blocked
 		|| DefenseResult == EZCDefenseHitResult::Parried
 		|| DefenseResult == EZCDefenseHitResult::GuardBroken)
 	{
-		// Blocking, a successful parry, and the breaking hit all consume the hit
-		// before Super/Attributes can decrement health.
+		// 格挡、成功招架和破防命中都会先消费这次攻击接触
+		// 再进入 Super 与 Attributes 的生命值结算
 		return 0.0f;
 	}
 	const bool bDamageDuringGuardBreak = DefenseResult == EZCDefenseHitResult::DamageThroughBroken;
-	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门。
+	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	if (!Attributes || !FMath::IsFinite(EngineDamage) || EngineDamage <= 0.0f)
 	{
 		return 0.0f;
 	}
 
-	// 三颗心共六个半心：每次有效命中固定扣半心，不改变敌人的伤害规则。
+	// 三颗心共六个半心：每次有效命中固定扣半心，不改变敌人的伤害规则
 	const float HalfHeartHealth = Attributes->GetMaxHealth() / 6.0f;
-	// 消除连续六次减法的浮点尾差，保证最后半心扣完时立即进入死亡。
+	// 消除连续六次减法的浮点尾差，保证最后半心扣完时立即进入死亡
 	const float HealthDamage = Attributes->GetHealth() <= HalfHeartHealth + KINDA_SMALL_NUMBER
 		? Attributes->GetHealth() : HalfHeartHealth;
 	const FZCDamageResult Result = Attributes->ApplyDamage(HealthDamage);
@@ -308,16 +316,16 @@ float AZCCharBase::TakeDamage(
 		return 0.0f;
 	}
 
-	// OnDeath 在 ApplyDamage 内同步触发；致死伤害不能先闪出一帧普通受击。
+	// OnDeath 在 ApplyDamage 内同步触发；致死伤害不能先闪出一帧普通受击
 	if (Result.bBecameDead)
 	{
-		// 保留 OnDeath 作为统一入口，同时为 BeginPlay 前等特殊路径提供幂等兜底。
+		// 保留 OnDeath 作为统一入口，同时为 BeginPlay 前等特殊路径提供幂等兜底
 		HandleDeath(this);
 	}
 	else
 	{
-		// Damage during Broken is ordinary health damage, but must not replace the
-		// active break pose with a normal hit reaction.
+		// Broken 期间仍按普通生命伤害处理，但不能覆盖当前
+		// 正在播放的破防姿态来播放普通受击反应
 		if (!bDamageDuringGuardBreak)
 		{
 			PlayHitReact();
@@ -337,7 +345,7 @@ void AZCCharBase::PlayHitReact()
 	UAnimInstance* AnimInstance = CharacterMesh ? CharacterMesh->GetAnimInstance() : nullptr;
 	if (bHitReactActive && HitReactMontage && AnimInstance && AnimInstance->Montage_IsPlaying(HitReactMontage))
 	{
-		// 重置同一个 Montage，不触发旧结束回调，避免连续受击时提前解除战斗锁定。
+		// 重置同一个 Montage，不触发旧结束回调，避免连续受击时提前解除战斗锁定
 		AnimInstance->Montage_SetPosition(HitReactMontage, 0.0f);
 		return;
 	}
@@ -449,7 +457,7 @@ void AZCCharBase::HandleDeath(AActor* DeadActor)
 
 bool AZCCharBase::CanBeTargetLocked() const
 {
-	// 没有属性组件时保持兼容；有属性组件时死亡角色不能成为锁定目标。
+	// 没有属性组件时保持兼容；有属性组件时死亡角色不能成为锁定目标
 	return (!Attributes || !Attributes->IsDead()) && !bDeathStarted;
 }
 
@@ -508,14 +516,14 @@ void AZCCharBase::Move_Triggered(const FInputActionValue& val)
 		&& (!FMath::IsNearlyZero(InputVector.X) || !FMath::IsNearlyZero(InputVector.Y))
 		&& (Combat->IsAttackActive() || Combat->GetWeaponState() == EZCWeaponState::Attacking))
 	{
-		// 移动输入立即取消当前攻击，避免攻击蒙太奇与移动同时生效。
+		// 移动输入立即取消当前攻击，避免攻击蒙太奇与移动同时生效
 		Combat->CancelAttack();
 	}
 
 	if (TargetLock && TargetLock->HasTarget() && !CanUseTargetLock())
 	{
-		// Clear the lock before movement chooses its basis, so a rune/throw state
-		// cannot leave one frame of target-relative movement after it starts.
+		// 在移动选择方向基准前清除锁定，避免符文或投掷状态
+		// 开始后残留一帧相对目标移动
 		TargetLock->ClearTarget();
 	}
 
@@ -548,7 +556,7 @@ void AZCCharBase::Move_Triggered(const FInputActionValue& val)
 
 	}
 
-	// 未锁定时保持原有的相机相对移动。
+	// 未锁定时保持原有的相机相对移动
 	const FRotator GroundRotation(0, Controller->GetControlRotation().Yaw, 0);
 	const FVector RightDir = FRotationMatrix(GroundRotation).GetUnitAxis(EAxis::Y);
 	AddMovementInput(RightDir, Vel_X);
@@ -582,7 +590,7 @@ void AZCCharBase::Look_Triggered(const FInputActionValue& val)
 		}
 	}
 
-	// Enhanced Input 的缩放、反转和其它修饰器仍由现有 Controller 管线处理。
+	// Enhanced Input 的缩放、反转和其它修饰器仍由现有 Controller 管线处理
 	AddControllerYawInput(LookVal.X);
 	AddControllerPitchInput(LookVal.Y);
 }
@@ -599,7 +607,7 @@ void AZCCharBase::TargetLock_Started(const FInputActionValue& val)
 	}
 
 	// Enhanced Input 本身只会在本地玩家上触发；这里再显式保护一次，避免
-	// 服务器或远程代理角色意外驱动本地目标循环。
+	// 服务器或远程代理角色意外驱动本地目标循环
 	if (!IsLocallyControlled())
 	{
 		return;
@@ -882,7 +890,7 @@ void AZCCharBase::Interact_Started(const FInputActionValue& val)
 	{
 		TSet<AActor*> tempActors;
 		GetOverlappingActors(tempActors);
-		// 忽略普通碰撞体，在有效交互对象中选择距离最近的一个。
+		// 忽略普通碰撞体，在有效交互对象中选择距离最近的一个
 		float ClosestDistanceSquared = TNumericLimits<float>::Max();
 		for (AActor* Actor : tempActors)
 		{
@@ -903,7 +911,7 @@ void AZCCharBase::Interact_Started(const FInputActionValue& val)
 			}
 			return;
 		}
-		// 入包拾取没有举起/放下的后续交互，由拾取物自身等待 Montage 结束。
+		// 入包拾取没有举起/放下的后续交互，由拾取物自身等待 Montage 结束
 		if (AZCInventoryPickupActor* Pickup = Cast<AZCInventoryPickupActor>(InteractingActor))
 		{
 			InteractingActor = nullptr;
@@ -931,8 +939,8 @@ void AZCCharBase::Tick(float DeltaTime)
 
 	if (TargetLock && TargetLock->HasTarget() && !CanUseTargetLock())
 	{
-		// State changes such as gliding or rune activation clear lock-on before
-		// either camera or character orientation can consume the stale target.
+		// 滑翔或符文激活等状态变化会先清除锁定
+		// 再让相机或角色朝向读取过期目标
 		TargetLock->ClearTarget();
 	}
 
@@ -965,7 +973,7 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 		EIComp->BindAction(TargetLockAction, ETriggerEvent::Started, this, &AZCCharBase::TargetLock_Started);
 	}
 
-	// Keep old BP_Player assets functional until their new exposed property is saved.
+	// 在旧 BP_Player 资产保存新增暴露属性前，保持其继续可用
 	if (!TargetUnlockAction)
 	{
 		TargetUnlockAction = LoadObject<UInputAction>(
@@ -1004,7 +1012,7 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 
 	if (AttackAction)
 	{
-		// 使用 Started 事件把 IA_Attack 接到角色回调，再由 Combat 决定拔刀或攻击。
+		// 使用 Started 事件把 IA_Attack 接到角色回调，再由 Combat 决定拔刀或攻击
 		EIComp->BindAction(AttackAction, ETriggerEvent::Started, this, &AZCCharBase::Attack_Started);
 	}
 	if (!OffWeaponAction)
@@ -1033,18 +1041,18 @@ void AZCCharBase::Attack_Started(const FInputActionValue& val)
 		return;
 	}
 
-	// Left mouse is the single gameplay action: an active rune releases first,
-	// while the inactive state keeps the original Combat attack behavior.
+	// 鼠标左键是统一玩法动作，存在激活符文时优先释放
+	// 未激活符文时保留原有 Combat 攻击行为
 	if (InteractingActor != nullptr || GetActivatedRune() != ERunes::R_EMAX)
 	{
-		// Keep the existing held-object throw path and rune-specific release logic.
+		// 保留现有手持物投掷路径和符文专属释放逻辑
 		ReleaseRune_Started(val);
 		return;
 	}
 
 	if (Combat)
 	{
-		// 角色不直接修改武器状态，避免输入层绕过 Combat 的状态机策略。
+		// 角色不直接修改武器状态，避免输入层绕过 Combat 的状态机策略
 		Combat->HandleAttackInput();
 	}
 }
@@ -1344,9 +1352,9 @@ void AZCCharBase::ToggleRuneActivity()
 		const bool bWillActivate = SelectedRune != ERunes::R_EMAX
 			&& RuneRuntime->GetActiveRune() != SelectedRune;
 
-		// Ice activation has a fallible trace/spawn step. Prepare that effect
-		// before publishing the ActiveRune transition so listeners never observe
-		// an activation that immediately rolls back inside the same broadcast.
+		// 制冰激活包含可能失败的 Trace 与生成步骤，先准备该效果
+		// 再发布 ActiveRune 状态切换，避免监听者观察到
+		// 同一次广播中立即回滚的激活状态
 		if (bWillActivate && SelectedRune == ERunes::R_Ice && !ActivateIceMode())
 		{
 			return;
@@ -1373,8 +1381,8 @@ void AZCCharBase::HandleActiveRuneChanged(const ERunes PreviousRune, const ERune
 		LocomotionManager(EMovementTypes::MT_Walking);
 		if (!ApplyRuneActivation(CurrentRune, true))
 		{
-			// Guard direct/future Runtime callers without recursively broadcasting
-			// OnActiveRuneChanged from inside its own listener.
+			// 保护直接或未来的 Runtime 调用，避免在监听器内部递归广播
+			// OnActiveRuneChanged
 			GetWorldTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(
 				this,
 				[this, CurrentRune]
@@ -1996,6 +2004,15 @@ void AZCCharBase::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTar
 		? Cast<IZCTargetable>(CurrentTarget)
 		: nullptr;
 	const bool bHasValidTarget = Targetable && Targetable->CanBeTargetLocked();
+	if (bHasValidTarget && PreviousTarget != CurrentTarget)
+	{
+		// 连续切敌沿用正在进行的角速度，从实际朝向继续转，不重放旧姿态
+		if (!bTargetSwitchTurnActive)
+		{
+			TargetSwitchYawVelocity = 0.0f;
+		}
+		bTargetSwitchTurnActive = true;
+	}
 	SetTargetLockRotationMode(bHasValidTarget);
 	if (Combat)
 	{
@@ -2032,7 +2049,7 @@ void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)
 	const IZCTargetable* Targetable = Cast<IZCTargetable>(CurrentTarget);
 	if (!Targetable || !Targetable->CanBeTargetLocked())
 	{
-		// 目标死亡等状态变化应立即退出锁定朝向，不等待组件下一次 Tick 兜底。
+		// 目标死亡等状态变化应立即退出锁定朝向，不等待组件下一次 Tick 兜底
 		TargetLock->ClearTarget();
 		return;
 	}
@@ -2069,7 +2086,49 @@ void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)
 	}
 
 	FRotator NewRotation = CurrentRotation;
-	NewRotation.Yaw = FMath::FixedTurn(CurrentRotation.Yaw, FMath::UnwindDegrees(TargetYaw), MaxYawStep);
+	if (bTargetSwitchTurnActive)
+	{
+		const float MaxSpeed = FMath::IsFinite(TargetSwitchRotationSpeed)
+			? FMath::Max(TargetSwitchRotationSpeed, 0.0f) : 420.0f;
+		const float Acceleration = FMath::IsFinite(TargetSwitchRotationAcceleration)
+			? FMath::Max(TargetSwitchRotationAcceleration, 1.0f) : 1800.0f;
+		const float SlowdownAngle = FMath::IsFinite(TargetSwitchSlowdownAngle)
+			? FMath::Max(TargetSwitchSlowdownAngle, 1.0f) : 60.0f;
+		if (!FMath::IsFinite(TargetSwitchYawVelocity))
+		{
+			TargetSwitchYawVelocity = 0.0f;
+		}
+
+		// 短子步让加减速在不同帧率下保持一致，也防止大帧间隔跨过制动区
+		float RemainingTime = FMath::Min(SafeDeltaTime, 0.25f);
+		while (RemainingTime > KINDA_SMALL_NUMBER && bTargetSwitchTurnActive)
+		{
+			const float StepTime = FMath::Min(RemainingTime, 1.0f / 60.0f);
+			RemainingTime -= StepTime;
+			const float YawError = FMath::FindDeltaAngleDegrees(static_cast<float>(NewRotation.Yaw), TargetYaw);
+			const float DesiredVelocity = MaxSpeed * FMath::Clamp(YawError / SlowdownAngle, -1.0f, 1.0f);
+			const float PreviousVelocity = TargetSwitchYawVelocity;
+			TargetSwitchYawVelocity = FMath::FInterpConstantTo(
+				PreviousVelocity, DesiredVelocity, StepTime, Acceleration);
+			const float YawStep = (PreviousVelocity + TargetSwitchYawVelocity) * 0.5f * StepTime;
+			const bool bReachedTarget = (FMath::Abs(YawError) <= 0.5f && FMath::Abs(TargetSwitchYawVelocity) <= 10.0f)
+				|| (YawStep * YawError > 0.0f && FMath::Abs(YawStep) >= FMath::Abs(YawError));
+			if (bReachedTarget)
+			{
+				NewRotation.Yaw = TargetYaw;
+				TargetSwitchYawVelocity = 0.0f;
+				bTargetSwitchTurnActive = false;
+			}
+			else
+			{
+				NewRotation.Yaw = FMath::UnwindDegrees(NewRotation.Yaw + YawStep);
+			}
+		}
+	}
+	else
+	{
+		NewRotation.Yaw = FMath::FixedTurn(CurrentRotation.Yaw, FMath::UnwindDegrees(TargetYaw), MaxYawStep);
+	}
 	if (FMath::IsFinite(NewRotation.Yaw))
 	{
 		SetActorRotation(NewRotation);
@@ -2079,6 +2138,11 @@ void AZCCharBase::UpdateTargetLockOrientation(const float DeltaTime)
 void AZCCharBase::SetTargetLockRotationMode(const bool bEnableTargetLockRotation)
 {
 	bTargetLockRotationActive = bEnableTargetLockRotation;
+	if (!bEnableTargetLockRotation)
+	{
+		bTargetSwitchTurnActive = false;
+		TargetSwitchYawVelocity = 0.0f;
+	}
 	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
 	{
 		Movement->bOrientRotationToMovement = !bEnableTargetLockRotation;
@@ -2110,5 +2174,3 @@ void AZCCharBase::UpdateGuardSuppression()
 }
 
 #pragma endregion
-
-

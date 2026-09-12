@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #pragma once
 
@@ -13,16 +13,18 @@ class UTextBlock;
 class UZCInventoryWidget;
 class UDragDropOperation;
 
-/** One native fallback inventory slot. A Blueprint subclass may replace its visual tree. */
+/** 一个原生备用背包格，蓝图子类可以替换其可视控件树 */
 UCLASS()
 class ZCASE_API UZCInventorySlotWidget : public UUserWidget
 {
 	GENERATED_BODY()
 
 public:
+	/** 写入格子索引和物品快照，随后刷新原生或蓝图视觉 */
 	void InitializeSlot(UZCInventoryWidget* InOwner, int32 InSlotIndex, const FZCInventorySlot& InSlot,
 		const FZCItemData* InItemData);
 
+	/** 返回拖放操作对应的背包格索引 */
 	int32 GetSlotIndex() const { return SlotIndex; }
 
 protected:
@@ -36,13 +38,20 @@ protected:
 		UDragDropOperation* InOperation) override;
 
 private:
+	/** 在 RebuildWidget 阶段创建没有蓝图控件树时的备用布局 */
 	void BuildNativeWidgetTree();
+	/** 根据当前物品快照更新图标、数量和边框 */
 	void RefreshVisual();
 
+	/** 接收拖放回调的背包面板 */
 	TWeakObjectPtr<UZCInventoryWidget> OwnerWidget;
+	/** 该控件对应的固定格索引 */
 	int32 SlotIndex = INDEX_NONE;
+	/** 当前显示的物品编号 */
 	int32 ItemId = INDEX_NONE;
+	/** 当前显示的物品数量 */
 	int32 Amount = 0;
+	/** 当前物品图标，空格时为空 */
 	TObjectPtr<UTexture2D> ItemIcon = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))

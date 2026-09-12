@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #pragma once
 
@@ -10,9 +10,9 @@ class AZCCharBase;
 class UWidgetSwitcher;
 
 /**
- * Root player layout. Visual composition stays in Blueprint; presentation
- * state changes enter through semantic functions instead of reaching into the
- * Blueprint's WidgetSwitcher from gameplay code.
+ * 玩家界面的根布局，视觉组合保留在蓝图中
+ * 状态变化通过语义函数进入，而不是直接访问
+ * 蓝图 WidgetSwitcher
  */
 UCLASS()
 class ZCASE_API UZCLayout : public UUserWidget
@@ -20,25 +20,25 @@ class ZCASE_API UZCLayout : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	/** Existing Blueprint initialization hook retained for asset compatibility. */
+	/** 保留的蓝图初始化扩展点，用于兼容已有资产 */
 	UFUNCTION(BlueprintImplementableEvent)
 	void ConstructDeferred(AZCCharBase* PlayerRef);
 
-	/** Existing Blueprint stamina animation hook retained for asset compatibility. */
+	/** 保留的蓝图体力动画扩展点，用于兼容已有资产 */
 	UFUNCTION(BlueprintImplementableEvent)
 	void ShowGaugeAnim(bool bShow);
 
 	/**
-	 * Switches between gameplay (index 0) and rune selection (index 1).
-	 * Blueprints may override this, while the native fallback works with the
-	 * first WidgetSwitcher found in the existing WidgetTree.
+	 * 在游戏界面（索引 0）和符文选择界面（索引 1）之间切换
+	 * 蓝图可以覆盖此函数，原生备用实现会使用
+	 * WidgetTree 中找到的第一个 WidgetSwitcher
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "ZCase|Player Presentation")
 	void SetRuneMenuOpen(bool bOpen);
 	virtual void SetRuneMenuOpen_Implementation(bool bOpen);
 
 protected:
-	/** Preferred explicit binding for the existing UI_Layout switcher. */
+	/** 现有 UI_Layout 切换器的首选显式绑定 */
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UWidgetSwitcher> WidgetSwitcher;
 	

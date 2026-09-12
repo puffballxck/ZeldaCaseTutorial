@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "Gameplay/ZCRuneRuntimeComponent.h"
 
@@ -33,7 +33,7 @@ bool UZCRuneRuntimeComponent::SelectRune(const ERunes NewRune)
 		return false;
 	}
 
-	// Cancel first so the ActiveRune invariant also holds while listeners run.
+	// 先取消当前状态，确保监听器运行期间也满足 ActiveRune 不变量
 	if (ActiveRune != ERunes::R_EMAX)
 	{
 		SetActiveRune(ERunes::R_EMAX);

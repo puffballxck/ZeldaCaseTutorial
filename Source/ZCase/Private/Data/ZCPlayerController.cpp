@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 
 #include "Data/ZCPlayerController.h"
@@ -47,8 +47,8 @@ void AZCPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AZCPlayerController::OnPossess(APawn* InPawn)
 {
-	// A pawn can be replaced without being destroyed. Clear its gameplay lock
-	// before the controller starts presenting the newly possessed pawn.
+	// Pawn 可能在未销毁时被替换，因此先清除旧 Pawn 的玩法锁定
+	// 再由控制器开始表现新被 Possess 的 Pawn
 	if (AZCCharBase* PreviousPlayer = Cast<AZCCharBase>(GetPawn());
 		IsValid(PreviousPlayer) && PreviousPlayer != InPawn && PreviousPlayer->TargetLock)
 	{
@@ -101,8 +101,8 @@ void AZCPlayerController::InitializePlayerPresentation()
 		return;
 	}
 
-	// Wait until the pawn's BeginPlay has completed so its gameplay state and
-	// Blueprint defaults are ready before the presentation binds to it.
+	// 等待 Pawn 的 BeginPlay 完成，使其玩法状态和
+	// 蓝图默认值准备完成后再绑定表现层
 	if (!PlayerCharacter->HasActorBegunPlay())
 	{
 		RequestPresentationInitialization();
@@ -146,9 +146,9 @@ void AZCPlayerController::InitializePlayerPresentation()
 		}
 	}
 
-	// Adopt a legacy layout only when no controller-owned class is configured.
-	// This keeps old BP_Player assets working while allowing RootLayoutClass to
-	// become the authoritative composition root as assets are migrated.
+	// 仅当未配置控制器持有的布局类时才接管旧布局
+	// 这样既兼容旧 BP_Player 资产，也允许 RootLayoutClass
+	// 在资产迁移过程中成为权威组合根节点
 	if (!RootLayoutClass && IsValid(PlayerCharacter->LayoutRef) && PlayerCharacter->LayoutRef != RootLayout)
 	{
 		if (IsValid(RootLayout))
@@ -186,8 +186,8 @@ void AZCPlayerController::InitializePlayerPresentation()
 		RootLayout->AddToPlayerScreen();
 	}
 
-	// Keep the pawn reference synchronized for stamina/rune code that still
-	// talks to LayoutRef directly during the staged migration.
+	// 保持 Pawn 引用同步，供迁移期间仍然
+	// 直接访问 LayoutRef 的体力与符文代码使用
 	PlayerCharacter->LayoutRef = RootLayout;
 	InitializeInventoryPresentation();
 	ApplyRuneMenuPolicy();
@@ -197,14 +197,14 @@ void AZCPlayerController::SetRuneMenuOpen(const bool bOpen)
 {
 	if (bOpen)
 	{
-		// Rune and inventory panels are mutually exclusive presentation states.
+		// 符文面板和背包面板是互斥的表现状态
 		bInventoryMenuOpen = false;
 	}
 
 	if (bRuneMenuOpen == bOpen)
 	{
-		// Reapplying is intentional: callers may invoke this before the layout is
-		// created, or after focus was taken by another widget.
+		// 重复应用是有意设计，调用方可能在布局
+		// 创建前调用，也可能在焦点被其他控件夺走后调用
 		ApplyRuneMenuPolicy();
 		return;
 	}
@@ -222,7 +222,7 @@ void AZCPlayerController::SetInventoryMenuOpen(const bool bOpen)
 {
 	if (bOpen)
 	{
-		// The two menus share one focus target and one pause lease.
+		// 两个菜单共享一个焦点目标和一份暂停租约
 		bRuneMenuOpen = false;
 	}
 
@@ -378,8 +378,8 @@ void AZCPlayerController::ApplyRuneMenuPolicy()
 	const bool bAnyMenuOpen = bRuneMenuOpen || bInventoryMenuOpen;
 	if (bAnyMenuOpen && !IsValid(RootLayout) && !IsValid(InventoryWidget))
 	{
-		// Do not pause before there is a focus target: game-time timers do not
-		// advance while paused, so initialization could otherwise deadlock.
+		// 在存在焦点目标前不要暂停，游戏时间 Timer 不会
+		// 在暂停时推进，否则初始化可能死锁
 		RequestPresentationInitialization();
 		return;
 	}
@@ -461,8 +461,8 @@ void AZCPlayerController::InitializeTargetLockPresentation(AZCCharBase* PlayerCh
 		TargetLockIndicator = CreateWidget<UZCTargetLockIndicatorWidget>(this, TargetLockIndicatorClass);
 		if (IsValid(TargetLockIndicator))
 		{
-			// Keep the indicator above the controller-owned root layout and its
-			// rune menu while remaining a single reusable widget instance.
+			// 让指示器位于控制器持有的根布局和
+			// 符文菜单之上，同时保持为唯一可复用的控件实例
 			TargetLockIndicator->AddToPlayerScreen(100);
 		}
 	}
@@ -483,8 +483,8 @@ void AZCPlayerController::InitializeTargetLockPresentation(AZCCharBase* PlayerCh
 		}
 	}
 
-	// Synchronize an already-active target in case possession/presentation
-	// initialization happened after the pawn's first target change event.
+	// 同步已经激活的目标，防止 Possess 或表现层
+	// 初始化晚于 Pawn 第一次目标变更事件
 	HandleTargetChanged(nullptr, BoundTargetLock.IsValid() ? BoundTargetLock->GetCurrentTarget() : nullptr);
 }
 

@@ -33,7 +33,7 @@ void AZCInventoryPickupActor::ToggleInteraction(AZCCharBase* Character)
 	}
 
 	UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance();
-	// 不覆盖攻击、受击等正在播放的动作，也防止同时拾取多个物品。
+	// 不覆盖攻击、受击等正在播放的动作，也防止同时拾取多个物品
 	if (!AnimInstance || !PickupMontage || AnimInstance->IsAnyMontagePlaying())
 	{
 		return;
@@ -60,7 +60,7 @@ void AZCInventoryPickupActor::HandlePickupEnded(UAnimMontage* Montage, bool bInt
 	}
 	AZCCharBase* Character = PlayerRef;
 	PlayerRef = nullptr;
-	// 入包会同步广播 UI 事件，在整个提交期间保持防重入标记。
+	// 入包会同步广播 UI 事件，在整个提交期间保持防重入标记
 	if (bInterrupted || !IsValid(Character) || !InteractSphere->IsOverlappingActor(Character)
 		|| (Character->Combat && !Character->Combat->CanAcceptCombatInput()))
 	{

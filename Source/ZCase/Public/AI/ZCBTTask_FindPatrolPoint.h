@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #pragma once
 
@@ -6,7 +6,7 @@
 #include "BehaviorTree/BehaviorTreeTypes.h"
 #include "ZCBTTask_FindPatrolPoint.generated.h"
 
-/** Writes one reachable random point near the Bokoblin into PatrolLocation. */
+/** 将 Bokoblin 附近一个可到达的随机点写入 PatrolLocation */
 UCLASS()
 class ZCASE_API UZCBTTask_FindPatrolPoint : public UBTTaskNode
 {
@@ -20,9 +20,11 @@ public:
 		uint8* NodeMemory) override;
 
 protected:
+	/** 在出生点附近搜索随机可达点的半径，单位为厘米 */
 	UPROPERTY(EditAnywhere, Category = "Patrol", meta = (ClampMin = "0.0"))
 	float PatrolRadius = 800.0f;
 
+	/** 写入行为树黑板的巡逻位置键 */
 	UPROPERTY(EditAnywhere, Category = "Patrol")
 	FBlackboardKeySelector PatrolLocationKey;
 };

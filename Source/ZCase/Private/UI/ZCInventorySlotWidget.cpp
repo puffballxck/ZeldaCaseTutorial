@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 请在项目设置的说明页面填写版权声明
 
 #include "UI/ZCInventorySlotWidget.h"
 
@@ -25,7 +25,7 @@ void UZCInventorySlotWidget::InitializeSlot(UZCInventoryWidget* InOwner, const i
 
 TSharedRef<SWidget> UZCInventorySlotWidget::RebuildWidget()
 {
-	// 每个格子也必须在生成 Slate 根控件之前创建布局。
+	// 每个格子也必须在生成 Slate 根控件之前创建布局
 	if (!WidgetTree)
 	{
 		Initialize();

@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "Combat/ZCTargetLockComponent.h"
 
@@ -28,7 +28,7 @@ UZCTargetLockComponent::UZCTargetLockComponent()
 
 bool UZCTargetLockComponent::SetTarget(AActor* Candidate)
 {
-	// 只有实现目标接口且明确允许锁定的对象才能成为目标。
+	// 只有实现目标接口且明确允许锁定的对象才能成为目标
 	if (!IsValidTarget(Candidate))
 	{
 		return false;
@@ -36,7 +36,7 @@ bool UZCTargetLockComponent::SetTarget(AActor* Candidate)
 
 	if (CurrentTarget.Get() == Candidate)
 	{
-		// 重复锁定同一对象保持幂等，不重复触发目标变更事件。
+		// 重复锁定同一对象保持幂等，不重复触发目标变更事件
 		return true;
 	}
 
@@ -105,7 +105,7 @@ bool UZCTargetLockComponent::CycleTarget()
 		}
 
 		// 中键循环只使用实际玩家视点的可见且处于安全区内的目标，
-		// 但不再施加镜头前方角度限制，因此角色背后的目标也可参与循环。
+		// 但不再施加镜头前方角度限制，因此角色背后的目标也可参与循环
 		if (!IsTargetVisible(Candidate, ViewLocation)
 			|| !IsTargetInScreenSafeArea(Candidate, PlayerController, ViewLocation, ViewRotation))
 		{
@@ -117,7 +117,7 @@ bool UZCTargetLockComponent::CycleTarget()
 
 	if (Candidates.Num() == 0)
 	{
-		// 没有候选时保持当前状态，按键本身不产生任何锁定变化。
+		// 没有候选时保持当前状态，按键本身不产生任何锁定变化
 		return false;
 	}
 
@@ -144,7 +144,7 @@ bool UZCTargetLockComponent::CycleTarget()
 	const int32 NextIndex = CurrentIndex == INDEX_NONE
 		? 0
 		: (CurrentIndex + 1) % Candidates.Num();
-	// SetTarget 内部直接替换目标，A->B 只会广播一次，不经过 ClearTarget。
+	// SetTarget 内部直接替换目标，A->B 只会广播一次，不经过 ClearTarget
 	return SetTarget(Candidates[NextIndex].Target);
 }
 
@@ -236,7 +236,7 @@ bool UZCTargetLockComponent::AcquireBestTarget(
 		}
 
 		// 真实本地玩家沿用循环锁定的安全屏幕边界；自动化/非玩家对象
-		// 没有本地视点时保留原有的参数化获取回退路径。
+		// 没有本地视点时保留原有的参数化获取回退路径
 		if (PlayerController
 			&& !IsTargetInScreenSafeArea(Candidate, PlayerController, ViewLocation, ViewForward.Rotation()))
 		{
@@ -255,7 +255,7 @@ bool UZCTargetLockComponent::AcquireBestTarget(
 			: AngleScore;
 
 		// Score 以屏幕中心角度为主；用距离和唯一 ID 作为稳定的平局裁决，
-		// 避免 TActorIterator 的内部顺序改变时锁定目标发生无意义跳变。
+		// 避免 TActorIterator 的内部顺序改变时锁定目标发生无意义跳变
 		const bool bBetterScore = Score < BestScore - KINDA_SMALL_NUMBER;
 		const bool bEqualScore = FMath::IsNearlyEqual(Score, BestScore, KINDA_SMALL_NUMBER);
 		const bool bBetterTieBreak = bEqualScore
@@ -298,7 +298,7 @@ void UZCTargetLockComponent::TickComponent(
 	AActor* Owner = GetOwner();
 	if (!IsValidTarget(Target) || !IsValid(Owner))
 	{
-		// Tick 负责兜底清理被销毁或不再可锁定的目标。
+		// Tick 负责兜底清理被销毁或不再可锁定的目标
 		ClearTarget();
 		return;
 	}
@@ -316,13 +316,13 @@ void UZCTargetLockComponent::TickComponent(
 	const float DistanceSquared = FVector::DistSquared(OwnerLocation, TargetLocation);
 	if (!FMath::IsFinite(DistanceSquared) || DistanceSquared > FMath::Square(SafeLostDistance))
 	{
-		// 目标离开锁定距离后立即解除，避免角色继续朝向远处目标。
+		// 目标离开锁定距离后立即解除，避免角色继续朝向远处目标
 		ClearTarget();
 		return;
 	}
 
-	// 维持锁定只检查实际遮挡，不因玩家主动将目标移出画面而解除。
-	// 没有本地玩家视点时，遮挡射线回退到拥有者位置。
+	// 维持锁定只检查实际遮挡，不因玩家主动将目标移出画面而解除
+	// 没有本地玩家视点时，遮挡射线回退到拥有者位置
 	FVector ViewLocation = OwnerLocation;
 	if (const APawn* PawnOwner = Cast<APawn>(Owner))
 	{
@@ -344,7 +344,7 @@ void UZCTargetLockComponent::TickComponent(
 		const float SafeGracePeriod = FMath::Max(OcclusionGracePeriod, 0.0f);
 		if (SafeGracePeriod <= KINDA_SMALL_NUMBER || OccludedDuration >= SafeGracePeriod)
 		{
-			// 短时遮挡允许镜头保持锁定；持续遮挡则结束锁定生命周期。
+			// 短时遮挡允许镜头保持锁定；持续遮挡则结束锁定生命周期
 			ClearTarget();
 		}
 	}
@@ -358,7 +358,7 @@ void UZCTargetLockComponent::HandleTargetDestroyed(AActor* DestroyedActor)
 {
 	if (CurrentTarget.Get() == DestroyedActor)
 	{
-		// OnDestroyed 回调比下一帧 Tick 更早清除已销毁目标。
+		// OnDestroyed 回调比下一帧 Tick 更早清除已销毁目标
 		ClearTarget();
 	}
 }
@@ -371,7 +371,7 @@ bool UZCTargetLockComponent::IsValidTarget(const AActor* Candidate) const
 	}
 
 	const IZCTargetable* Targetable = Cast<IZCTargetable>(Candidate);
-	// 接口实现仍需通过自身的可锁定策略，例如死亡状态检查。
+	// 接口实现仍需通过自身的可锁定策略，例如死亡状态检查
 	return Targetable && Targetable->CanBeTargetLocked();
 }
 
@@ -408,7 +408,7 @@ bool UZCTargetLockComponent::IsTargetVisible(const AActor* Candidate, const FVec
 		ECC_Visibility,
 		QueryParams);
 
-	// 没有阻挡体，或第一阻挡体就是候选目标本身，都视为可见。
+	// 没有阻挡体，或第一阻挡体就是候选目标本身，都视为可见
 	return !bHit || HitResult.GetActor() == Candidate;
 }
 
@@ -476,7 +476,7 @@ void UZCTargetLockComponent::ReplaceTarget(AActor* NewTarget)
 
 	if (PreviousTarget)
 	{
-		// 替换前解绑旧目标，避免旧对象销毁时回调到当前锁定组件。
+		// 替换前解绑旧目标，避免旧对象销毁时回调到当前锁定组件
 		PreviousTarget->OnDestroyed.RemoveDynamic(this, &UZCTargetLockComponent::HandleTargetDestroyed);
 	}
 
@@ -484,13 +484,13 @@ void UZCTargetLockComponent::ReplaceTarget(AActor* NewTarget)
 	OccludedDuration = 0.0f;
 	if (NewTarget)
 	{
-		// 有目标时监听销毁事件并开启 Tick，持续验证目标可用性。
+		// 有目标时监听销毁事件并开启 Tick，持续验证目标可用性
 		NewTarget->OnDestroyed.AddUniqueDynamic(this, &UZCTargetLockComponent::HandleTargetDestroyed);
 		SetComponentTickEnabled(true);
 	}
 	else
 	{
-		// 没有目标时无需每帧验证，关闭 Tick 以结束锁定生命周期。
+		// 没有目标时无需每帧验证，关闭 Tick 以结束锁定生命周期
 		SetComponentTickEnabled(false);
 	}
 

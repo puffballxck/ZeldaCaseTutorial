@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// 版权所有 Epic Games, Inc，保留所有权利
 
 #include "AI/ZCBTTask_Chase.h"
 
@@ -21,6 +21,7 @@ EBTNodeResult::Type UZCBTTask_Chase::ExecuteTask(
 	UBehaviorTreeComponent& OwnerComp,
 	uint8* NodeMemory)
 {
+	// 追击接收半径跟随实际被控制 Bokoblin 的攻击距离，避免行为树资产与配置脱节
 	if (AAIController* AIController = OwnerComp.GetAIOwner())
 	{
 		if (AZCBokoblinEnemy* Enemy = Cast<AZCBokoblinEnemy>(AIController->GetPawn()))
