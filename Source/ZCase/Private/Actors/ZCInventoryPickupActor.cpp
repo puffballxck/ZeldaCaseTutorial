@@ -9,7 +9,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/GameInstance.h"
 #include "Inventory/ZCInventorySubsystem.h"
-#include "UObject/ConstructorHelpers.h"
 
 AZCInventoryPickupActor::AZCInventoryPickupActor()
 {
@@ -18,10 +17,6 @@ AZCInventoryPickupActor::AZCInventoryPickupActor()
 	InteractSphere->SetCollisionResponseToAllChannels(ECR_Ignore);
 	InteractSphere->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 	InteractSphere->SetGenerateOverlapEvents(true);
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> MontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Take_LR.AM_Take_LR"));
-	PickupMontage = MontageFinder.Object;
 }
 
 void AZCInventoryPickupActor::ToggleInteraction(AZCCharBase* Character)

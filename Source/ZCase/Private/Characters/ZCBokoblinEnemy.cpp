@@ -9,7 +9,6 @@
 #include "BrainComponent.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 #include "Characters/ZCCharBase.h"
 #include "Combat/ZCAttributeComponent.h"
 #include "Combat/ZCCombatComponent.h"
@@ -28,12 +27,6 @@ AZCBokoblinEnemy::AZCBokoblinEnemy()
 	AttackTraceTipPoint = TEXT("Finger_B_2_R");
 	AIControllerClass = AZCBokoblinAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> KnockdownFinder(
-		TEXT("/Game/_Game/Animations/Enemy/Bokoblin/Animation/Montage/AM_Bokoblin_Death.AM_Bokoblin_Death"));
-	ParryKnockdownMontage = KnockdownFinder.Object;
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> GetupFinder(
-		TEXT("/Game/_Game/Animations/Enemy/Bokoblin/Animation/Montage/AM_Down_Getup.AM_Down_Getup"));
-	ParryGetupMontage = GetupFinder.Object;
 	if (USkeletalMeshComponent* EnemyMesh = GetMesh())
 	{
 		// 由骨骼驱动的 Trace 即使敌人离屏也必须持续更新

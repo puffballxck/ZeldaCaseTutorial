@@ -118,9 +118,14 @@ void UZCInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, c
 
 	if (IsValid(ItemIcon))
 	{
+		USizeBox* DragVisualSizeBox = NewObject<USizeBox>(DragOperation);
+		DragVisualSizeBox->SetWidthOverride(96.0f);
+		DragVisualSizeBox->SetHeightOverride(96.0f);
+
 		UImage* DragVisual = NewObject<UImage>(DragOperation);
-		DragVisual->SetBrushFromTexture(ItemIcon, true);
-		DragOperation->DefaultDragVisual = DragVisual;
+		DragVisual->SetBrushFromTexture(ItemIcon, false);
+		DragVisualSizeBox->SetContent(DragVisual);
+		DragOperation->DefaultDragVisual = DragVisualSizeBox;
 	}
 
 	OutOperation = DragOperation;

@@ -18,7 +18,6 @@
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 
 UZCCombatComponent::UZCCombatComponent()
 {
@@ -27,46 +26,6 @@ UZCCombatComponent::UZCCombatComponent()
 	PrimaryComponentTick.bStartWithTickEnabled = false;
 	// 在动画和角色移动更新后读取附着武器的位置，避免 Sweep 使用上一阶段的骨骼变换
 	PrimaryComponentTick.TickGroup = TG_PostPhysics;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> DrawMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_DrawSword.AM_DrawSword"));
-	DrawSwordMontage = DrawMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> SheathMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_SheathSword.AM_SheathSword"));
-	SheathSwordMontage = SheathMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> LockedDrawMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/00_Combat/06_Equip_Build/Sword/AM_Equip_Sword_On_Lockon_Additive.AM_Equip_Sword_On_Lockon_Additive"));
-	DrawSwordOnLockonAdditiveMontage = LockedDrawMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_01.AM_Attack_01"));
-	AttackMontage = AttackMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage02Finder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_02.AM_Attack_02"));
-	AttackMontage02 = AttackMontage02Finder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage03Finder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_03.AM_Attack_03"));
-	AttackMontage03 = AttackMontage03Finder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontage04Finder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Attack_04.AM_Attack_04"));
-	AttackMontage04 = AttackMontage04Finder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardHitMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Sword_Guard_Hit.AM_Sword_Guard_Hit"));
-	GuardHitMontage = GuardHitMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardParryMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Sword_Guard_Just.AM_Sword_Guard_Just"));
-	GuardParryMontage = GuardParryMontageFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> GuardBreakMontageFinder(
-		TEXT("/Game/_Game/Animations/LinkAnim/Montage/AM_Guard_BreaK.AM_Guard_BreaK"));
-	GuardBreakMontage = GuardBreakMontageFinder.Object;
 }
 
 void UZCCombatComponent::InitializeEquipment(
