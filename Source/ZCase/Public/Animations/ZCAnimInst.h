@@ -48,6 +48,14 @@ public:
 	UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category ="References")
 	/** 是否处于滑翔状态 */
 	bool bIsGliding = false;
+
+	/** 角色当前是否处于精力耗尽状态 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Stamina")
+	bool bIsExhausted = false;
+
+	/** 角色是否处于精力耗尽、落地且静止的疲惫待机条件 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Stamina")
+	bool bIsExhaustedIdle = false;
 	
 	UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category ="References")
 	/** 是否持有可投掷物体 */
@@ -68,6 +76,23 @@ public:
 	/** 水平移动速度相对角色朝向的局部角度，范围为 -180 到 180 度 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Target Lock")
 	float LockOnDirection = 0.0f;
+
+	/** 滑翔 2D BlendSpace 的局部左右方向，范围为 -1 到 1 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Gliding")
+	float GlideRight = 0.0f;
+
+	/** 滑翔 2D BlendSpace 的局部前后方向，范围为 -1 到 1 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Gliding")
+	float GlideForward = 0.0f;
+
+	/**
+	 * 将世界空间水平速度投影到控制器 Yaw 的左右/前后输入
+	 * 返回值 X 为右方，Y 为前方；速度或最大飞行速度无效时返回零向量
+	 */
+	static FVector2D CalculateGlideBlendInput(
+		const FVector& WorldVelocity,
+		const FRotator& ControlRotation,
+		float MaxFlySpeed);
 
 	/**
 	 * 将世界空间水平速度转换为相对角色 Yaw 的局部移动角度

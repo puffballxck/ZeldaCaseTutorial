@@ -18,6 +18,10 @@ void UZCAnimInst::NativeInitializeAnimation()
 void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 {
 	Super::NativeUpdateAnimation(DeltaTime);
+	GlideRight = 0.0f;
+	GlideForward = 0.0f;
+	bIsExhausted = false;
+	bIsExhaustedIdle = false;
 
 	if (!IsValid(PlayerRef))
 	{
@@ -47,11 +51,24 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 		return;
 	}
 
-	GroundSpeed = UKismetMathLibrary::VSizeXY(PlayerRef->GetVelocity());
-	AirSpeed = PlayerRef->GetVelocity().Z;
+	const FVector Velocity = PlayerRef->GetVelocity();
+	GroundSpeed = UKismetMathLibrary::VSizeXY(Velocity);
+	AirSpeed = Velocity.Z;
 	bIsFalling = MoveComp->IsFalling();
 	bShouldMove = !bIsFalling && GroundSpeed >5.0f && MoveComp->GetCurrentAcceleration().Size()>0;
 	bIsGliding = PlayerRef->CurrentMT == EMovementTypes::MT_Gliding;
+	bIsExhausted = PlayerRef->CurrentMT == EMovementTypes::MT_Exhausted;
+	bIsExhaustedIdle = bIsExhausted && MoveComp->IsMovingOnGround() && GroundSpeed <= 5.0f;
+	if (bIsGliding)
+	{
+		// 用实际水平速度持续驱动滑翔姿态，避免加速度归零时 BlendSpace 回到中心
+		const FVector2D GlideInput = CalculateGlideBlendInput(
+			Velocity,
+			PlayerRef->GetControlRotation(),
+			MoveComp->MaxFlySpeed);
+		GlideRight = GlideInput.X;
+		GlideForward = GlideInput.Y;
+	}
 	bReadyToThrow = PlayerRef->bReadyToThrow;
 	// 拔刀完成后才进入装备姿势；攻击和收刀期间继续保持该姿势，直到收刀结束
 	bWeaponEquipped = PlayerRef->Combat && PlayerRef->Combat->IsWeaponEquippedForAnimation();
@@ -59,9 +76,30 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	LockOnDirection = bIsTargetLocked
 		? CalculateLockOnDirection(
 			PlayerRef->GetActorRotation(),
-			FVector(PlayerRef->GetVelocity().X, PlayerRef->GetVelocity().Y, 0.0f),
+			FVector(Velocity.X, Velocity.Y, 0.0f),
 			LockOnDirection)
 		: 0.0f;
+}
+
+FVector2D UZCAnimInst::CalculateGlideBlendInput(
+	const FVector& WorldVelocity,
+	const FRotator& ControlRotation,
+	const float MaxFlySpeed)
+{
+	if (WorldVelocity.ContainsNaN()
+		|| !FMath::IsFinite(ControlRotation.Yaw)
+		|| !FMath::IsFinite(MaxFlySpeed)
+		|| MaxFlySpeed <= KINDA_SMALL_NUMBER)
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	const FVector HorizontalVelocity(WorldVelocity.X, WorldVelocity.Y, 0.0f);
+	const FRotator ControlYaw(0.0f, ControlRotation.Yaw, 0.0f);
+	const FVector LocalInput = ControlYaw.UnrotateVector(HorizontalVelocity / MaxFlySpeed);
+	return FVector2D(
+		FMath::Clamp(LocalInput.Y, -1.0f, 1.0f),
+		FMath::Clamp(LocalInput.X, -1.0f, 1.0f));
 }
 
 float UZCAnimInst::CalculateLockOnDirection(
