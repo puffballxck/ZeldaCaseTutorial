@@ -200,6 +200,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Defense")
 	void SetGuardSuppressed(bool bInGuardSuppressed);
 
+	/** 攀爬和上下沿过渡期间拒绝所有战斗输入、Notify 和自动守卫 */
+	UFUNCTION(BlueprintCallable, Category = "ZCase|Combat|Traversal")
+	void SetTraversalSuppressed(bool bSuppressed);
+
+	UFUNCTION(BlueprintPure, Category = "ZCase|Combat|Traversal")
+	bool IsTraversalSuppressed() const { return bTraversalSuppressed; }
+
 	/** 在 CharBase 扣血前调用；只处理正面守卫、招架、破防和破防期间的普通伤害 */
 	EZCDefenseHitResult ResolveIncomingDamage(const FDamageEvent& DamageEvent, AActor* DamageCauser);
 
@@ -230,7 +237,12 @@ public:
 
 	/** 返回战斗动作当前是否可用 */
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
-	bool CanAcceptCombatInput() const { return CombatAvailability == EZCCombatAvailability::Enabled && !IsGuardBroken(); }
+	bool CanAcceptCombatInput() const
+	{
+		return CombatAvailability == EZCCombatAvailability::Enabled
+			&& !IsGuardBroken()
+			&& !bTraversalSuppressed;
+	}
 
 	UFUNCTION(BlueprintPure, Category = "ZCase|Combat")
 	EZCCombatAvailability GetCombatAvailability() const { return CombatAvailability; }
@@ -498,6 +510,10 @@ private:
 	bool bTargetLockActive = false;
 	/** 攻击、跳跃、冲刺、技能和持物期间暂时隐藏守卫姿势 */
 	bool bGuardSuppressed = false;
+	/** 攀爬及上下沿过渡期间锁住战斗入口和迟到动画回调 */
+	bool bTraversalSuppressed = false;
+	/** 攀爬接管挂点后屏蔽旧拔刀/收刀 Notify，直到新的武器过渡开始 */
+	bool bIgnoreAttachmentNotifies = false;
 	/** ParryWindowStart/End Timer 的代数校验 */
 	uint32 ParryWindowGeneration = 0;
 	/** 当前是否位于招架有效窗口 */

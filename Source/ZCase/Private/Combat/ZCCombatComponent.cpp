@@ -50,6 +50,8 @@ void UZCCombatComponent::InitializeEquipment(
 	DefenseState = EZCDefenseState::Normal;
 	bTargetLockActive = false;
 	bGuardSuppressed = false;
+	bTraversalSuppressed = false;
+	bIgnoreAttachmentNotifies = false;
 	bParryWindowActive = false;
 	GuardBlockCount = 0;
 	ActiveDrawMontage = nullptr;
@@ -85,6 +87,8 @@ void UZCCombatComponent::InitializeAttackSource(
 	DefenseState = EZCDefenseState::Normal;
 	bTargetLockActive = false;
 	bGuardSuppressed = false;
+	bTraversalSuppressed = false;
+	bIgnoreAttachmentNotifies = false;
 	bParryWindowActive = false;
 	GuardBlockCount = 0;
 	ActiveDrawMontage = nullptr;
@@ -269,6 +273,91 @@ void UZCCombatComponent::SetGuardSuppressed(const bool bInGuardSuppressed)
 	}
 
 	EnsureGuardState();
+}
+
+void UZCCombatComponent::SetTraversalSuppressed(const bool bSuppressed)
+{
+	// 独立于 Enabled、Reacting、Disabled 的临时门禁，解除攀爬不重置受击和死亡状态
+	if (bTraversalSuppressed == bSuppressed)
+	{
+		return;
+	}
+
+	bTraversalSuppressed = bSuppressed;
+	if (!bSuppressed)
+	{
+		// 受击和死亡是更高优先级的战斗锁定，不能被攀爬结束提前解除
+		if (CombatAvailability == EZCCombatAvailability::Enabled && !IsGuardBroken())
+		{
+			bGuardSuppressed = false;
+		}
+		return;
+	}
+
+	// 先切断入口，再清理现有生命周期，避免本帧迟到的 Notify 重新开启 Trace 或挂点
+	ClearAutoSheathTimer();
+	ClearAttachmentTimer();
+	ClearDefenseTimers();
+	ResetGuardBlockCount();
+	bTargetLockActive = false;
+	bGuardSuppressed = true;
+	bIgnoreAttachmentNotifies = true;
+
+	const bool bHadActiveAttack = FinishAttack();
+	UAnimInstance* AnimInstance = CharacterMesh ? CharacterMesh->GetAnimInstance() : nullptr;
+	UAnimMontage* AttackMontageToStop = ActiveAttackMontage.Get();
+	UAnimMontage* DrawMontageToStop = ActiveDrawMontage.Get();
+	if (AnimInstance)
+	{
+		if (AttackMontageToStop)
+		{
+			ClearAttackMontageEndDelegate(AnimInstance);
+		}
+		if (DrawMontageToStop)
+		{
+			FOnMontageEnded EmptyEndDelegate;
+			AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, DrawMontageToStop);
+		}
+		if (SheathSwordMontage)
+		{
+			FOnMontageEnded EmptyEndDelegate;
+			AnimInstance->Montage_SetEndDelegate(EmptyEndDelegate, SheathSwordMontage);
+		}
+	}
+	ClearDrawMontageEndDelegate();
+	StopDefenseMontage();
+
+	if (AnimInstance)
+	{
+		// 只停 Combat 自己持有的动画，避免误停刚启动的攀爬 Montage
+		if (AttackMontageToStop && AnimInstance->Montage_IsPlaying(AttackMontageToStop))
+		{
+			AnimInstance->Montage_Stop(0.05f, AttackMontageToStop);
+		}
+		if (DrawMontageToStop && AnimInstance->Montage_IsPlaying(DrawMontageToStop))
+		{
+			AnimInstance->Montage_Stop(0.05f, DrawMontageToStop);
+		}
+		if (SheathSwordMontage && AnimInstance->Montage_IsPlaying(SheathSwordMontage))
+		{
+			AnimInstance->Montage_Stop(0.05f, SheathSwordMontage);
+		}
+	}
+
+	ActiveAttackMontage = nullptr;
+	bActivePlayerAttackCombo = false;
+	bPlayerAttackQueued = false;
+	bPlayerAttackTraceWindowEnded = false;
+	ResetPlayerAttackCombo();
+	DefenseState = EZCDefenseState::Normal;
+	// 物理挂点、逻辑武器状态和 AnimBP 装备姿势同步回收刀状态
+	ApplyEquipmentAttachmentState(EZCWeaponAttachmentState::Sheathed);
+	WeaponState = EZCWeaponState::Sheathed;
+
+	if (bHadActiveAttack)
+	{
+		OnAttackEnded.Broadcast(true);
+	}
 }
 
 bool UZCCombatComponent::IsGuardPoseActive() const
@@ -821,6 +910,7 @@ bool UZCCombatComponent::StartDraw()
 
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	bIgnoreAttachmentNotifies = false;
 	ActiveDrawMontage = RequestedDrawMontage;
 	// 只有拔刀蒙太奇完成或被打断，才能离开 Drawing 状态
 	WeaponState = EZCWeaponState::Drawing;
@@ -888,6 +978,7 @@ bool UZCCombatComponent::RequestSheath()
 
 	ClearAutoSheathTimer();
 	ClearAttachmentTimer();
+	bIgnoreAttachmentNotifies = false;
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;
 	ResetPlayerAttackCombo();
@@ -1126,7 +1217,7 @@ void UZCCombatComponent::HandleSheathMontageEnded(UAnimMontage* Montage, const b
 void UZCCombatComponent::SetEquipmentAttachmentState(const EZCWeaponAttachmentState AttachmentState)
 {
 	// 受击/死亡后忽略旧攻击 Montage 迟到的挂点 Notify
-	if (!CanAcceptCombatInput())
+	if (bTraversalSuppressed || bIgnoreAttachmentNotifies || !CanAcceptCombatInput())
 	{
 		return;
 	}
@@ -1369,6 +1460,8 @@ void UZCCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	DefenseState = EZCDefenseState::Normal;
 	bTargetLockActive = false;
 	bGuardSuppressed = false;
+	bTraversalSuppressed = false;
+	bIgnoreAttachmentNotifies = false;
 	bActivePlayerAttackCombo = false;
 	bPlayerAttackQueued = false;
 	bPlayerAttackTraceWindowEnded = false;

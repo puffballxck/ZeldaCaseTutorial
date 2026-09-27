@@ -12,7 +12,7 @@ public class ZCase : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore","EnhancedInput","UMG", "AIModule", "NavigationSystem" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "FieldSystemEngine", "Slate", "SlateCore" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "FieldSystemEngine", "Slate", "SlateCore", "MotionWarping" });
 
 		// Slate 界面依赖已在上方启用，下面保留配置示例
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

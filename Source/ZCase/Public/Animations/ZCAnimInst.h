@@ -6,10 +6,12 @@
 #include "Animation/AnimInstance.h"
 #include "Characters/ZCCharBase.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Gameplay/ZCGameplayTypes.h"
 #include "ZCAnimInst.generated.h"
 
 class AZCCharBase;
 class UCharacterMovementComponent;
+class UZCCharacterMovementComponent;
 UCLASS()
 class ZCASE_API UZCAnimInst : public UAnimInstance
 {
@@ -56,6 +58,26 @@ public:
 	/** 角色是否处于精力耗尽、落地且静止的疲惫待机条件 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Stamina")
 	bool bIsExhaustedIdle = false;
+
+	/** 是否正在贴墙攀爬；由自定义移动组件决定 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Climbing")
+	bool bIsClimbing = false;
+
+	/** 是否选用攀爬基础姿势；上墙收尾提前为 false，实际过渡类型仍由 ClimbTransitionMode 表示 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Climbing")
+	bool bIsClimbTraversing = false;
+
+	/** 攀爬切向速度相对墙面右方向的分量 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Climbing")
+	float ClimbRight = 0.0f;
+
+	/** 攀爬切向速度相对墙面上方向的分量 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Climbing")
+	float ClimbUp = 0.0f;
+
+	/** 当前上下沿过渡类型；无过渡时为 None */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "References|Climbing")
+	EZCCustomMovementMode ClimbTransitionMode = EZCCustomMovementMode::None;
 	
 	UPROPERTY(VisibleAnywhere,BlueprintReadOnly,Category ="References")
 	/** 是否持有可投掷物体 */

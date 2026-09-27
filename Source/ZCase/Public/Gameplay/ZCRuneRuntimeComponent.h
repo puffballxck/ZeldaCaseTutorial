@@ -52,6 +52,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="ZCase|Runes")
 	bool CancelAll();
 
+	/** 攀爬期间仍允许选择和取消符文，只禁止激活 */
+	void SetActivationSuppressed(bool bSuppressed);
+
 	UPROPERTY(BlueprintAssignable, Category="ZCase|Runes")
 	FZCSelectedRuneChangedSignature OnSelectedRuneChanged;
 
@@ -59,6 +62,7 @@ public:
 	FZCActiveRuneChangedSignature OnActiveRuneChanged;
 
 private:
+	bool bActivationSuppressed = false;
 	/** 更新激活符文并广播一次状态变化 */
 	void SetActiveRune(ERunes NewActiveRune);
 

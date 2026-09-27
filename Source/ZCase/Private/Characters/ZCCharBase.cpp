@@ -1,6 +1,8 @@
 // 请在项目设置的说明页面填写版权声明
 
 #include "Characters/ZCCharBase.h"
+#include "Characters/ZCCharacterMovementComponent.h"
+#include "MotionWarpingComponent.h"
 #include "Characters/ZCBokoblinEnemy.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
@@ -10,6 +12,9 @@
 #include "Gameplay/ZCRuneRuntimeComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
+#include "TimerManager.h"
 #include "Debug/DebugHelper.h"
 #include "UI/ZCLayout.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -19,6 +24,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Actors/IceActor.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Actors/StaticActor.h"
@@ -38,9 +44,11 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogZCPlayerCombat, Log, All);
 
-AZCCharBase::AZCCharBase()
+AZCCharBase::AZCCharBase(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UZCCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
+	MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
 
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
@@ -141,6 +149,170 @@ AZCCharBase::AZCCharBase()
 	IceEnabled = CreateDefaultSubobject<UMaterialInterface>(TEXT("IceEnabled"));
 }
 
+UZCCharacterMovementComponent* AZCCharBase::GetClimbMovement() const
+{
+	return Cast<UZCCharacterMovementComponent>(GetCharacterMovement());
+}
+
+bool AZCCharBase::IsClimbTraversalActive() const
+{
+	const UZCCharacterMovementComponent* Movement = GetClimbMovement();
+	return Movement && Movement->IsClimbTraversalActive();
+}
+
+bool AZCCharBase::CanStartClimbing() const
+{
+	// 统一收口自动抓墙的玩法条件，移动组件只负责几何与物理判定
+	if (bDeathStarted || bStaminaExhausted || InteractingActor || bReadyToThrow)
+	{
+		return false;
+	}
+	if (RuneRuntime && RuneRuntime->GetActiveRune() != ERunes::R_EMAX)
+	{
+		return false;
+	}
+	if (TargetLock && TargetLock->HasTarget())
+	{
+		return false;
+	}
+	if (!Combat || Combat->IsGuardBroken() || Combat->IsAttackActive()
+		|| Combat->GetWeaponState() == EZCWeaponState::Drawing
+		|| Combat->GetWeaponState() == EZCWeaponState::Sheathing)
+	{
+		return false;
+	}
+	return Combat->CanAcceptCombatInput();
+}
+
+void AZCCharBase::HandleClimbTraversalChanged(const bool bActive)
+{
+	// CMC 模式已切换后才更新兼容状态和外部组件，避免监听者看到半更新的数据
+	if (bActive)
+	{
+		const bool bWasClimbTraversal = CurrentMT == EMovementTypes::MT_Climbing
+			|| CurrentMT == EMovementTypes::MT_Mantling
+			|| CurrentMT == EMovementTypes::MT_ClimbDownLedge;
+		// 先封住 Combat 和 Rune 的实际执行入口，再更新动画与 UI 状态
+		if (Combat) Combat->SetTraversalSuppressed(true);
+		if (RuneRuntime) RuneRuntime->SetActivationSuppressed(true);
+		const EMovementTypes TraversalType = GetClimbMovement() && GetClimbMovement()->CustomMovementMode == uint8(EZCCustomMovementMode::Mantling)
+			? EMovementTypes::MT_Mantling
+			: GetClimbMovement() && GetClimbMovement()->CustomMovementMode == uint8(EZCCustomMovementMode::ClimbDownLedge)
+			? EMovementTypes::MT_ClimbDownLedge
+			: EMovementTypes::MT_Climbing;
+		UpdateMovementTypeFromComponent(TraversalType);
+		Vel_X = 0.0f;
+		Vel_Y = 0.0f;
+		if (Parachute) Parachute->SetVisibility(false);
+		ClearDrainRecoverStamina();
+		if (TargetLock) TargetLock->ClearTarget();
+		// 攀爬独立扣除精力，不经过 StartDrainStamina；仅在进入时显示，避免上下沿切换重播。
+		if (!bWasClimbTraversal && IsValid(LayoutRef))
+		{
+			LayoutRef->ShowGaugeAnim(true);
+		}
+	}
+	else
+	{
+		// 退出只解除攀爬抑制，死亡、破防等更高优先级的限制继续由各组件维护
+		if (!bDeathStarted)
+		{
+			if (RuneRuntime) RuneRuntime->SetActivationSuppressed(false);
+			if (Combat && Combat->GetCombatAvailability() == EZCCombatAvailability::Enabled)
+			{
+				Combat->SetTraversalSuppressed(false);
+			}
+		}
+		// 退出攀爬时清除旧冲刺意图和速度，掉落后着陆也沿用普通地面速度
+		bSprintRequested = false;
+		GetCharacterMovement()->MaxWalkSpeed = bStaminaExhausted ? 300.0f : 500.0f;
+		GetCharacterMovement()->AirControl = 0.35f;
+		if (GetCharacterMovement()->IsFalling()) UpdateMovementTypeFromComponent(EMovementTypes::MT_Falling);
+		else if (GetCharacterMovement()->IsMovingOnGround()) UpdateMovementTypeFromComponent(
+			bStaminaExhausted ? EMovementTypes::MT_Exhausted : EMovementTypes::MT_Walking);
+		if (Parachute) Parachute->SetVisibility(false);
+		if (!bDeathStarted && !bStaminaExhausted && GetCharacterMovement()->IsMovingOnGround())
+		{
+			StartRecoverStamina();
+		}
+	}
+	BroadcastStaminaChanged();
+}
+
+void AZCCharBase::ResetLocomotionInput()
+{
+	Vel_X = 0.0f;
+	Vel_Y = 0.0f;
+	if (GetClimbMovement()) GetClimbMovement()->ResetClimbInput();
+}
+
+void AZCCharBase::OnMovementModeChanged(const EMovementMode PreviousMovementMode, const uint8 PreviousCustomMode)
+{
+	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
+	// 任何途径退出滑翔物理模式，都停止旧的精力消耗并恢复普通空中控制。
+	if (PreviousMovementMode == MOVE_Flying && GetCharacterMovement()->MovementMode != MOVE_Flying)
+	{
+		ClearDrainRecoverStamina();
+		GetCharacterMovement()->AirControl = 0.35f;
+	}
+	if (!GetClimbMovement() || GetClimbMovement()->IsClimbTraversalActive()) return;
+	if (GetCharacterMovement()->IsFalling())
+	{
+		ClearDrainRecoverStamina();
+		UpdateMovementTypeFromComponent(EMovementTypes::MT_Falling);
+	}
+}
+
+void AZCCharBase::UpdateMovementTypeFromComponent(const EMovementTypes NewMovement)
+{
+	if (CurrentMT == NewMovement)
+	{
+		return;
+	}
+
+	const EMovementTypes PreviousMovement = CurrentMT;
+	CurrentMT = NewMovement;
+	OnMovementTypeChanged.Broadcast(PreviousMovement, CurrentMT);
+	if (Parachute)
+	{
+		Parachute->SetVisibility(CurrentMT == EMovementTypes::MT_Gliding);
+	}
+}
+
+void AZCCharBase::ConsumeTraversalStamina(const float DeltaSeconds)
+{
+	// 攀爬物理按实际子步传入耗时，墙面待机由 CMC 跳过此调用
+	if (DeltaSeconds <= 0.0f || bStaminaExhausted || !GetClimbMovement() || !GetClimbMovement()->IsClimbTraversalActive()) return;
+	const float CostPerSecond = GetClimbMovement()->IsClimbing() ? ClimbStaminaPerSecond : ClimbTransitionStaminaPerSecond;
+	CurStamina = FMath::Clamp(CurStamina - CostPerSecond * DeltaSeconds, 0.0f, MaxStamina);
+	if (CurStamina <= KINDA_SMALL_NUMBER)
+	{
+		// 同一次扣除到零就立即脱墙，不能等下次定时器更新
+		CurStamina = 0.0f;
+		bStaminaExhausted = true;
+		BroadcastStaminaChanged();
+		GetClimbMovement()->StopClimbing(EZCClimbExitReason::Exhausted);
+		return;
+	}
+	BroadcastStaminaChanged();
+}
+
+void AZCCharBase::Climb_Started(const FInputActionValue& val)
+{
+	// 动作键只处理主动松手和从平台下爬，自动抓墙由 CMC 自行检测
+	UZCCharacterMovementComponent* Movement = GetClimbMovement();
+	if (!Movement || bDeathStarted) return;
+	if (Movement->IsClimbTraversalActive())
+	{
+		if (Movement->IsClimbing())
+		{
+			Movement->StopClimbing(EZCClimbExitReason::Released);
+		}
+		return;
+	}
+	Movement->TryStartClimbDownLedge();
+}
+
 void AZCCharBase::BeginPlay()
 {
 	Super::BeginPlay();
@@ -183,6 +355,9 @@ void AZCCharBase::BeginPlay()
 
 	//初始化精力值
 	CurStamina = MaxStamina;
+	bStaminaExhausted = false;
+	LastStaminaUpdateTime = GetWorld()->GetTimeSeconds();
+	SyncLocomotionState();
 	BroadcastStaminaChanged();
 
 	if (RuneRuntime)
@@ -238,6 +413,8 @@ void AZCCharBase::BeginPlay()
 
 void AZCCharBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ClearDrainRecoverStamina();
+	if (GetClimbMovement()) GetClimbMovement()->StopClimbing(EZCClimbExitReason::Death);
 	if (Attributes)
 	{
 		Attributes->OnDeath.RemoveDynamic(this, &AZCCharBase::HandleDeath);
@@ -298,6 +475,10 @@ float AZCCharBase::TakeDamage(
 		return 0.0f;
 	}
 	const bool bDamageDuringGuardBreak = DefenseResult == EZCDefenseHitResult::DamageThroughBroken;
+	if (GetClimbMovement())
+	{
+		GetClimbMovement()->StopClimbing(EZCClimbExitReason::HitReaction);
+	}
 	// 先让引擎完成伤害事件处理，再由属性组件执行生命值钳制和死亡闸门
 	const float EngineDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	if (!Attributes || !FMath::IsFinite(EngineDamage) || EngineDamage <= 0.0f)
@@ -405,6 +586,7 @@ void AZCCharBase::HandleDeath(AActor* DeadActor)
 	}
 
 	bDeathStarted = true;
+	if (GetClimbMovement()) GetClimbMovement()->StopClimbing(EZCClimbExitReason::Death);
 	bHitReactActive = false;
 	SetCanBeDamaged(false);
 	SetActorTickEnabled(false);
@@ -424,7 +606,6 @@ void AZCCharBase::HandleDeath(AActor* DeadActor)
 
 	StopJumping();
 	ClearDrainRecoverStamina();
-	GetWorldTimerManager().ClearTimer(AddGravityForFlyingTimerHandle);
 	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
 	{
 		Movement->StopMovementImmediately();
@@ -469,13 +650,15 @@ FVector AZCCharBase::GetTargetLockLocation() const
 void AZCCharBase::Landed(const FHitResult& Hit) //着陆逻辑
 {
 	Super::Landed(Hit);
-	if (Combat && !Combat->IsGuardBroken() && CurrentMT != EMovementTypes::MT_Sprinting)
+	if (Combat && !Combat->IsGuardBroken() && CurrentMT != EMovementTypes::MT_Sprinting
+		&& !IsClimbTraversalActive())
 	{
 		Combat->SetGuardSuppressed(false);
 	}
-	if (CurrentMT == EMovementTypes::MT_Exhausted)
+	if (bStaminaExhausted || CurrentMT == EMovementTypes::MT_Exhausted)
 	{
 		//立刻回复精力
+		CurrentMT = EMovementTypes::MT_Exhausted;
 		StartRecoverStamina();
 		return;
 	}
@@ -502,6 +685,16 @@ void AZCCharBase::Landed(const FHitResult& Hit) //着陆逻辑
 
 void AZCCharBase::Move_Triggered(const FInputActionValue& val)
 {
+	if (bDeathStarted) return;
+	// 贴墙输入按墙面轴投影，上下沿过渡只记录轴值而不追加普通位移
+	if (UZCCharacterMovementComponent* Movement = GetClimbMovement(); Movement && Movement->IsClimbTraversalActive())
+	{
+		const FVector2D Input = val.Get<FVector2D>();
+		Vel_X = Input.X;
+		Vel_Y = Input.Y;
+		if (Movement->IsClimbing()) AddMovementInput(Movement->GetClimbInputDirection(Input));
+		return;
+	}
 	if (Combat && Combat->IsGuardBroken())
 	{
 		Vel_X = 0.0f;
@@ -568,6 +761,7 @@ void AZCCharBase::Move_Completed(const FInputActionValue& val)
 {
 	Vel_X = 0;
 	Vel_Y = 0;
+	if (GetClimbMovement()) GetClimbMovement()->ResetClimbInput();
 }
 
 void AZCCharBase::Look_Triggered(const FInputActionValue& val)
@@ -655,12 +849,14 @@ void AZCCharBase::Sprint_Triggered(const FInputActionValue& val)
 	//用于监听，当无输入且在冲刺状态时，取消冲刺状态进入Walking状态
 	if (Vel_X == 0 && Vel_Y == 0 && CurrentMT == EMovementTypes::MT_Sprinting)
 	{
+		bSprintRequested = false;
 		LocomotionManager(EMovementTypes::MT_Walking);
 	}
 }
 
 void AZCCharBase::Sprint_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bStaminaExhausted || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -676,12 +872,14 @@ void AZCCharBase::Sprint_Started(const FInputActionValue& val)
 		{
 			Combat->SetGuardSuppressed(true);
 		}
+		bSprintRequested = true;
 		LocomotionManager(EMovementTypes::MT_Sprinting);
 	}
 }
 
 void AZCCharBase::Sprint_Completed(const FInputActionValue& val)
 {
+	bSprintRequested = false;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -695,6 +893,10 @@ void AZCCharBase::Sprint_Completed(const FInputActionValue& val)
 			Combat->SetGuardSuppressed(false);
 		}
 	}
+	else
+	{
+		SyncLocomotionState();
+	}
 }
 
 #pragma endregion
@@ -703,15 +905,14 @@ void AZCCharBase::Sprint_Completed(const FInputActionValue& val)
 
 void AZCCharBase::JumpGlide_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
 	}
 
-	if (CurrentMT == EMovementTypes::MT_Exhausted)return;
-	
-
-	if (GetCharacterMovement()->MovementMode != MOVE_Falling)
+	if (IsCharacterExhausted()) return;
+	if (GetCharacterMovement()->IsMovingOnGround())
 	{
 		//可以跳跃
 		if (Combat)
@@ -719,7 +920,6 @@ void AZCCharBase::JumpGlide_Started(const FInputActionValue& val)
 			Combat->SetGuardSuppressed(true);
 		}
 		Jump();
-		LocomotionManager(EMovementTypes::MT_Falling);
 		return;
 	}
 
@@ -774,6 +974,7 @@ void AZCCharBase::JumpGlide_Completed(const FInputActionValue& val)
 void AZCCharBase::ToggleUI_Started(const FInputActionValue& val)
 {
 	if (Combat && Combat->IsGuardBroken()) return;
+	if (IsClimbTraversalActive()) ResetLocomotionInput();
 	AutoDeactivateAllRunes();
 
 	if (AZCPlayerController* PC = Cast<AZCPlayerController>(Controller))
@@ -784,6 +985,7 @@ void AZCCharBase::ToggleUI_Started(const FInputActionValue& val)
 
 void AZCCharBase::ActiveRune_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -805,6 +1007,7 @@ void AZCCharBase::ActiveRune_Started(const FInputActionValue& val)
 
 void AZCCharBase::ReleaseRune_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -862,6 +1065,7 @@ void AZCCharBase::ReleaseRune_Started(const FInputActionValue& val)
 
 void AZCCharBase::Interact_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -965,6 +1169,8 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 
 	EIComp->BindAction(MoveAction,ETriggerEvent::Triggered,this,&AZCCharBase::Move_Triggered);
 	EIComp->BindAction(MoveAction,ETriggerEvent::Completed,this,&AZCCharBase::Move_Completed);
+	EIComp->BindAction(MoveAction,ETriggerEvent::Canceled,this,&AZCCharBase::Move_Completed);
+	if (ClimbAction) EIComp->BindAction(ClimbAction, ETriggerEvent::Started, this, &AZCCharBase::Climb_Started);
 
 	EIComp->BindAction(LookAction,ETriggerEvent::Triggered,this,&AZCCharBase::Look_Triggered);
 
@@ -1028,7 +1234,7 @@ void AZCCharBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 
 void AZCCharBase::OffWeapon_Started(const FInputActionValue& val)
 {
-	if (!bDeathStarted && Combat)
+	if (!bDeathStarted && !IsClimbTraversalActive() && Combat)
 	{
 		Combat->RequestSheath();
 	}
@@ -1036,6 +1242,7 @@ void AZCCharBase::OffWeapon_Started(const FInputActionValue& val)
 
 void AZCCharBase::Attack_Started(const FInputActionValue& val)
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && Combat->IsGuardBroken())
 	{
 		return;
@@ -1109,8 +1316,6 @@ void AZCCharBase::LocomotionManager(EMovementTypes NewMovement)
 #pragma region Locomotion
 void AZCCharBase::ResetToWalk()
 {
-	//如正在添加重力，此处取消
-	GetWorldTimerManager().ClearTimer(AddGravityForFlyingTimerHandle);
 	//重置回地面状态 （从滑翔、下落状态）
 	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Walking);
 }
@@ -1149,11 +1354,8 @@ void AZCCharBase::SetExhausted()
 	{
 		StartRecoverStamina();
 	}
-	else if (GetCharacterMovement()->MovementMode == EMovementMode::MOVE_Falling)
-	{
-		ResetToWalk();
-	}
-	else
+	else if (GetCharacterMovement()->MovementMode == EMovementMode::MOVE_Falling
+		|| IsClimbTraversalActive())
 	{
 		return;
 	}
@@ -1166,9 +1368,7 @@ void AZCCharBase::SetGliding()
 	GetCharacterMovement()->SetMovementMode(MOVE_Flying);
 
 	StartDrainStamina();
-	//设置模拟重力 每帧执行
-	GetWorldTimerManager().SetTimer(AddGravityForFlyingTimerHandle, this,
-		&AZCCharBase::AddGravityForFlying,GetWorld()->GetDeltaSeconds(),true);
+	// 缓降由移动组件 PhysFlying 处理，不使用会强制切换 Falling 的 LaunchCharacter。
 }
 
 void AZCCharBase::SetFalling()
@@ -1176,14 +1376,13 @@ void AZCCharBase::SetFalling()
 	GetCharacterMovement()->AirControl = 0.35f;
 
 	//下降时避免回复精力
-	ResetToWalk();
+	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Falling);
 	ClearDrainRecoverStamina();
 }
 
-bool AZCCharBase::IsCharacterExhausted()
+bool AZCCharBase::IsCharacterExhausted() const
 {
-	bool Equal = CurrentMT == EMovementTypes::MT_Exhausted;
-	return Equal;
+	return bStaminaExhausted;
 }
 
 float AZCCharBase::GetStaminaRatio() const
@@ -1209,13 +1408,51 @@ FVector AZCCharBase::CalculateDropLocation(float ForwardOffset, float TraceDista
 #pragma region Stamina
 void AZCCharBase::DrainStamina()
 {
-	if (CurStamina <= 0)
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : LastStaminaUpdateTime;
+	const float DeltaSeconds = FMath::Max(
+		0.0f,
+		static_cast<float>(Now - LastStaminaUpdateTime));
+	LastStaminaUpdateTime = Now;
+	const float CostPerSecond = StaminaDeletionAmount / FMath::Max(StaminaDepletionRate, KINDA_SMALL_NUMBER);
+	if (CurStamina <= 0.0f)
 	{
-		LocomotionManager(EMovementTypes::MT_Exhausted);
+		bStaminaExhausted = true;
+		ClearDrainRecoverStamina();
+		if (GetClimbMovement() && GetClimbMovement()->IsClimbTraversalActive())
+		{
+			GetClimbMovement()->StopClimbing(EZCClimbExitReason::Exhausted);
+		}
+		else if (GetCharacterMovement()->IsMovingOnGround())
+		{
+			LocomotionManager(EMovementTypes::MT_Exhausted);
+		}
+		else if (GetCharacterMovement()->MovementMode == EMovementMode::MOVE_Flying)
+		{
+			SetFalling();
+		}
+		BroadcastStaminaChanged();
 	}
 	else
 	{
-		CurStamina =FMath::Clamp((CurStamina - StaminaDeletionAmount),0.0f, MaxStamina);
+		CurStamina = FMath::Clamp(CurStamina - CostPerSecond * DeltaSeconds, 0.0f, MaxStamina);
+		if (CurStamina <= KINDA_SMALL_NUMBER)
+		{
+			CurStamina = 0.0f;
+			bStaminaExhausted = true;
+			ClearDrainRecoverStamina();
+			if (GetClimbMovement() && GetClimbMovement()->IsClimbTraversalActive())
+			{
+				GetClimbMovement()->StopClimbing(EZCClimbExitReason::Exhausted);
+			}
+			else if (GetCharacterMovement()->IsMovingOnGround())
+			{
+				LocomotionManager(EMovementTypes::MT_Exhausted);
+			}
+			else if (GetCharacterMovement()->MovementMode == EMovementMode::MOVE_Flying)
+			{
+				SetFalling();
+			}
+		}
 		BroadcastStaminaChanged();
 	}
 }
@@ -1224,9 +1461,10 @@ void AZCCharBase::StartDrainStamina()
 {
 	//清除已有计数器
     ClearDrainRecoverStamina();
+	LastStaminaUpdateTime = GetWorld() ? GetWorld()->GetTimeSeconds() : LastStaminaUpdateTime;
 	
 	GetWorldTimerManager().SetTimer(DrainStaminaTimerHandle, this,
-		&AZCCharBase::DrainStamina, StaminaDepletionRate, true);
+		&AZCCharBase::DrainStamina, FMath::Max(StaminaDepletionRate, KINDA_SMALL_NUMBER), true);
 	//显示UI
     if (LayoutRef)
     {
@@ -1236,15 +1474,33 @@ void AZCCharBase::StartDrainStamina()
 
 void AZCCharBase::RecoverStaminaTimer()
 {
+	// 防止离地后迟到的恢复回调在空中或攀爬期间增加精力
+	if (bDeathStarted || !GetCharacterMovement()->IsMovingOnGround())
+	{
+		GetWorldTimerManager().ClearTimer(RecoverStaminaTimerHandle);
+		return;
+	}
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : LastStaminaUpdateTime;
+	const float DeltaSeconds = FMath::Max(
+		0.0f,
+		static_cast<float>(Now - LastStaminaUpdateTime));
+	LastStaminaUpdateTime = Now;
+	const float RecoveryPerSecond = StaminaDeletionAmount / FMath::Max(StaminaDepletionRate, KINDA_SMALL_NUMBER);
 	if (CurStamina < MaxStamina)
 	{
-		CurStamina =FMath::Clamp((CurStamina + StaminaDeletionAmount),0.0f, MaxStamina);
+		CurStamina = FMath::Clamp(CurStamina + RecoveryPerSecond * DeltaSeconds, 0.0f, MaxStamina);
+		if (CurStamina >= MaxStamina - KINDA_SMALL_NUMBER)
+		{
+			CurStamina = MaxStamina;
+			bStaminaExhausted = false;
+		}
 		BroadcastStaminaChanged();
 	}
 	else
 	{
 		GetWorldTimerManager().ClearTimer(RecoverStaminaTimerHandle);
-		LocomotionManager(EMovementTypes::MT_Walking);
+		bStaminaExhausted = false;
+		if (GetCharacterMovement()->IsMovingOnGround()) LocomotionManager(EMovementTypes::MT_Walking);
 		//隐藏UI
 		if (LayoutRef)
 		{
@@ -1257,9 +1513,10 @@ void AZCCharBase::StartRecoverStamina()
 {
 	//清除已有计时器
 	ClearDrainRecoverStamina();
+	LastStaminaUpdateTime = GetWorld() ? GetWorld()->GetTimeSeconds() : LastStaminaUpdateTime;
 	
 	GetWorldTimerManager().SetTimer(RecoverStaminaTimerHandle, this,
-		&AZCCharBase::RecoverStaminaTimer, StaminaDepletionRate, true);
+		&AZCCharBase::RecoverStaminaTimer, FMath::Max(StaminaDepletionRate, KINDA_SMALL_NUMBER), true);
 }
 
 void AZCCharBase::ClearDrainRecoverStamina()
@@ -1273,11 +1530,19 @@ void AZCCharBase::BroadcastStaminaChanged()
 	OnStaminaChanged.Broadcast(CurStamina, MaxStamina, IsCharacterExhausted());
 }
 
-void AZCCharBase::AddGravityForFlying()
+void AZCCharBase::SyncLocomotionState()
 {
-	//给玩家提供z轴向下的力
-	LaunchCharacter(FVector(0.0f,0.0f,-100.0f),false,true);
+	if (IsClimbTraversalActive()) return;
+	if (GetCharacterMovement()->IsFalling())
+	{
+		UpdateMovementTypeFromComponent(EMovementTypes::MT_Falling);
+	}
+	else if (GetCharacterMovement()->IsMovingOnGround())
+	{
+		UpdateMovementTypeFromComponent(bStaminaExhausted ? EMovementTypes::MT_Exhausted : EMovementTypes::MT_Walking);
+	}
 }
+
 
 #pragma endregion
 
@@ -1326,6 +1591,7 @@ void AZCCharBase::AutoDeactivateAllRunes()
 
 void AZCCharBase::ToggleRuneActivity()
 {
+	if (IsClimbTraversalActive() || bDeathStarted) return;
 	if (Combat && !Combat->CanAcceptCombatInput())
 	{
 		return;
@@ -1412,6 +1678,7 @@ void AZCCharBase::HandleActiveRuneChanged(const ERunes PreviousRune, const ERune
 
 bool AZCCharBase::ApplyRuneActivation(const ERunes RuneType, const bool bShouldActivate)
 {
+	if (bShouldActivate && (IsClimbTraversalActive() || bDeathStarted)) return false;
 	switch (RuneType)
 	{
 	case ERunes::R_RBS:
@@ -2022,6 +2289,7 @@ void AZCCharBase::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTar
 
 bool AZCCharBase::CanUseTargetLock() const
 {
+	if (IsClimbTraversalActive()) return false;
 	const UCharacterMovementComponent* Movement = GetCharacterMovement();
 	const bool bIsGliding = CurrentMT == EMovementTypes::MT_Gliding
 		|| (Movement && Movement->MovementMode == EMovementMode::MOVE_Flying);
@@ -2153,6 +2421,8 @@ bool AZCCharBase::CanMaintainGuard() const
 {
 	const UCharacterMovementComponent* Movement = GetCharacterMovement();
 	return !bDeathStarted && Movement && Movement->IsMovingOnGround()
+		&& !bStaminaExhausted
+		&& !IsClimbTraversalActive()
 		&& CurrentMT != EMovementTypes::MT_Sprinting
 		&& CurrentMT != EMovementTypes::MT_Falling
 		&& CurrentMT != EMovementTypes::MT_Gliding

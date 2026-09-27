@@ -47,6 +47,7 @@ bool UZCRuneRuntimeComponent::SelectRune(const ERunes NewRune)
 
 bool UZCRuneRuntimeComponent::ToggleSelectedRune()
 {
+	if (bActivationSuppressed) return false;
 	if (SelectedRune == ERunes::R_EMAX)
 	{
 		return false;
@@ -65,6 +66,13 @@ bool UZCRuneRuntimeComponent::CancelAll()
 
 	SetActiveRune(ERunes::R_EMAX);
 	return true;
+}
+
+void UZCRuneRuntimeComponent::SetActivationSuppressed(bool bSuppressed)
+{
+	// 攀爬期间允许保留选中符文，但已有激活必须立即取消
+	bActivationSuppressed = bSuppressed;
+	if (bSuppressed) CancelAll();
 }
 
 void UZCRuneRuntimeComponent::SetActiveRune(const ERunes NewActiveRune)

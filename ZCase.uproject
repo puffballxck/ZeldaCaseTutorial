@@ -21,6 +21,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "MotionWarping",
+			"Enabled": true
+		},
+		{
 			"Name": "ModelingToolsEditorMode",
 			"Enabled": true,
 			"TargetAllowList": [

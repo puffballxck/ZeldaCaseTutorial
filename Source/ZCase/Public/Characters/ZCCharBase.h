@@ -26,6 +26,7 @@ class USceneComponent;
 class AStaticMeshActor;
 class UPhysicsHandleComponent;
 class UParticleSystem;
+class UParticleSystemComponent;
 class AStaticActor;
 class AInteractBase;
 class UZCRuneRuntimeComponent;
@@ -34,6 +35,8 @@ class UZCCombatComponent;
 class UZCTargetLockComponent;
 class UStaticMeshComponent;
 class UAnimMontage;
+class UMotionWarpingComponent;
+class UZCCharacterMovementComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FZCStaminaChangedSignature,
@@ -52,7 +55,26 @@ class ZCASE_API AZCCharBase : public ACharacter, public IZCTargetable
 	GENERATED_BODY()
 
 public:
-	AZCCharBase();
+	AZCCharBase(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	/** 下爬 Montage 使用的 Motion Warping 组件，由构造函数创建 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Climbing")
+	TObjectPtr<UMotionWarpingComponent> MotionWarping;
+	/** 仅负责松手和主动下爬，自动抓墙不依赖此输入 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Inputs")
+	TObjectPtr<UInputAction> ClimbAction;
+	UFUNCTION(BlueprintPure, Category="Climbing")
+	UZCCharacterMovementComponent* GetClimbMovement() const;
+	UFUNCTION(BlueprintPure, Category="Climbing")
+	bool IsClimbTraversalActive() const;
+	/** 由攀爬移动组件按实际移动时间扣除精力，扣空时立即结束攀爬 */
+	void ConsumeTraversalStamina(float DeltaSeconds);
+	/** 自动攀爬与主动下沿共用的玩法准入条件 */
+	bool CanStartClimbing() const;
+	/** CMC 完成模式切换后同步 Combat、Rune、精力和 CurrentMT */
+	void HandleClimbTraversalChanged(bool bActive);
+	void ResetLocomotionInput();
+	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode = 0) override;
 
 #pragma region	Variables
 	/** 角色锁定与跟随相机共用的 SpringArm */
@@ -148,7 +170,7 @@ public:
 	/** 当前动作是否允许举盾；供伤害和动画即时查询 */
 	bool CanMaintainGuard() const;
 
-	/** 当前移动状态，体力与动画系统都以它为状态来源 */
+	/** 实际移动模式的兼容表现状态，耗尽由独立标记表达 */
 	UPROPERTY(VisibleInstanceOnly,BlueprintReadOnly,category="Movements")
 	EMovementTypes CurrentMT{ EMovementTypes ::MT_EMAX};
 
@@ -389,6 +411,7 @@ protected:
 	/** Enhanced Input 的右键 Started 回调；交给 Combat 尝试有限窗口招架 */
 	UFUNCTION()
 	void Guard_Started(const FInputActionValue& val);
+	void Climb_Started(const FInputActionValue& val);
 	
 #pragma endregion
 	
@@ -452,7 +475,7 @@ public:
 	void SetFalling();
 
 	UFUNCTION(BlueprintCallable,BlueprintPure)
-	bool IsCharacterExhausted();
+	bool IsCharacterExhausted() const;
 
 	UFUNCTION(BlueprintPure, Category="Movements")
 	EMovementTypes GetMovementType() const { return CurrentMT; }
@@ -475,6 +498,13 @@ public:
 
 	UPROPERTY(EditAnywhere,BlueprintReadOnly,category="Stamina")
 	float StaminaDeletionAmount = 0.5f; //每次执行消耗精力逻辑时消耗多少
+
+	/** 只有墙面实际切向移动才按秒扣除 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Stamina", meta=(ClampMin="0"))
+	float ClimbStaminaPerSecond = 10.0f;
+	/** 上下沿过渡期间按秒扣除，不由旧精力定时器重复扣费 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Stamina", meta=(ClampMin="0"))
+	float ClimbTransitionStaminaPerSecond = 10.0f;
 	
 	UPROPERTY(BlueprintAssignable, Category="Stamina")
 	FZCStaminaChangedSignature OnStaminaChanged;
@@ -501,9 +531,6 @@ public:
 	/** 清理消耗与恢复 Timer，避免两个方向同时运行 */
 	void ClearDrainRecoverStamina();
 
-	FTimerHandle AddGravityForFlyingTimerHandle;
-
-	void AddGravityForFlying();
 	
 #pragma endregion
 
@@ -586,6 +613,11 @@ public:
 
 	bool ApplyRuneActivation(ERunes RuneType, bool bShouldActivate);
 	void BroadcastStaminaChanged();
+	void UpdateMovementTypeFromComponent(EMovementTypes NewMovement);
+	void SyncLocomotionState();
+	bool bStaminaExhausted = false;
+	bool bSprintRequested = false;
+	double LastStaminaUpdateTime = 0.0;
 
 	void ReadyToThrow(UStaticMeshComponent* SMRef);
 
@@ -609,4 +641,3 @@ public:
 	bool bTargetSwitchTurnActive = false;
 	float TargetSwitchYawVelocity = 0.0f;
 };
-

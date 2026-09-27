@@ -4,6 +4,7 @@
 #include "Combat/ZCCombatComponent.h"
 #include "Combat/ZCTargetLockComponent.h"
 #include "Combat/ZCTargetable.h"
+#include "Characters/ZCCharacterMovementComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 
 void UZCAnimInst::NativeInitializeAnimation()
@@ -22,6 +23,11 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	GlideForward = 0.0f;
 	bIsExhausted = false;
 	bIsExhaustedIdle = false;
+	bIsClimbing = false;
+	bIsClimbTraversing = false;
+	ClimbRight = 0.0f;
+	ClimbUp = 0.0f;
+	ClimbTransitionMode = EZCCustomMovementMode::None;
 
 	if (!IsValid(PlayerRef))
 	{
@@ -57,8 +63,33 @@ void UZCAnimInst::NativeUpdateAnimation(float DeltaTime)
 	bIsFalling = MoveComp->IsFalling();
 	bShouldMove = !bIsFalling && GroundSpeed >5.0f && MoveComp->GetCurrentAcceleration().Size()>0;
 	bIsGliding = PlayerRef->CurrentMT == EMovementTypes::MT_Gliding;
-	bIsExhausted = PlayerRef->CurrentMT == EMovementTypes::MT_Exhausted;
+	bIsExhausted = PlayerRef->IsCharacterExhausted();
 	bIsExhaustedIdle = bIsExhausted && MoveComp->IsMovingOnGround() && GroundSpeed <= 5.0f;
+	if (const UZCCharacterMovementComponent* ClimbMovement = Cast<UZCCharacterMovementComponent>(MoveComp))
+	{
+		// BlendSpace 使用真实墙面切向速度，法线吸附和上下沿位移不写入方向轴
+		bIsClimbing = ClimbMovement->IsClimbing();
+		const bool bTraversalActive = ClimbMovement->IsClimbTraversalActive();
+		// 对应 ABP_Link 攀爬 Bool 节点的 0.15 秒混合，并预留当前更新帧。
+		// FullBody Slot 必须开启 Always Update Source Pose，使被遮住的地面姿势也能更新。
+		bIsClimbTraversing = ClimbMovement->ShouldUseClimbBasePose(0.15f + FMath::Max(DeltaTime, 0.0f));
+		if (bTraversalActive)
+		{
+			const FVector2D ClimbVelocity = ClimbMovement->GetClimbLocalVelocity();
+			ClimbRight = ClimbVelocity.X;
+			ClimbUp = ClimbVelocity.Y;
+			if (!bIsClimbing)
+			{
+				ClimbTransitionMode = static_cast<EZCCustomMovementMode>(ClimbMovement->CustomMovementMode);
+			}
+			if (ClimbTransitionMode == EZCCustomMovementMode::Mantling)
+			{
+				// 上墙轨迹的搬移速度不是地面跑步输入；让 Montage 混向站立。
+				GroundSpeed = 0.0f;
+				bShouldMove = false;
+			}
+		}
+	}
 	if (bIsGliding)
 	{
 		// 用实际水平速度持续驱动滑翔姿态，避免加速度归零时 BlendSpace 回到中心
